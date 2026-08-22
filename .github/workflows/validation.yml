@@ -1,0 +1,33 @@
+name: validation
+
+on:
+  workflow_dispatch:
+
+jobs:
+  benchmarks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          environment-file: environment.yml
+          miniforge-version: latest
+
+      - name: Install package
+        run: pip install -e .
+
+      - name: Run benchmarks
+        run: pytest validation/ -m slow
+
+      - name: Upload figures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-figures
+          path: validation/figures/
+          if-no-files-found: ignore
