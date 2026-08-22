@@ -1,0 +1,38 @@
+{
+  "python.terminal.activateEnvironment": true,
+  "cSpell.language": "en,es",
+  "cSpell.words": [
+    "arfield",
+    "DPSM",
+    "einsum",
+    "Gorkov",
+    "numpy",
+    "scipy"
+  ],
+  "cSpell.enabledFileTypes": {
+    "yaml": false,
+    "json": false,
+    "toml": false
+  },
+  "ltex.language": "en-US",
+  "ltex.enabled": [
+    "markdown",
+    "latex"
+  ],
+  "ltex.dictionary": {
+    "en-US": [
+      "arfield",
+      "DPSM",
+      "Gorkov",
+      "Placko",
+      "Kundu"
+    ]
+  },
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "arfield"
+version = "0.0.1"
+description = "Acoustic radiation force fields via the distributed point source method"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Jhon F. Pazos Ospina" }]
+keywords = ["DPSM", "acoustic levitation", "acoustic radiation force", "ultrasonics"]
+dependencies = ["numpy>=2.0", "scipy>=1.14"]
+
+[tool.ruff]
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "NPY", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

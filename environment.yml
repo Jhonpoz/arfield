@@ -1,0 +1,16 @@
+name: arfield
+channels:
+    - conda-forge
+dependencies:
+    - python=3.12 
+    - numpy=2.5
+    - scipy=1.18
+    - matplotlib=3.11
+    - plotly=6.9
+    - ipympl=0.10
+    - jupyterlab=4.6
+    - pytest=9.1
+    - pytest-cov=7.1
+    - ruff=0.16
+    - mypy=2.3
+    - pre-commit=4.6
