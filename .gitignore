@@ -7,3 +7,7 @@ dist/
 .ruff_cache/
 .mypy_cache/
 .ipynb_checkpoints/
+
+# Notas de trabajo locales, no versionadas
+BITACORA.md
+GIT_CHEATSHEET.md
