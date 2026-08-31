@@ -1,21 +1,43 @@
+"""Point sources standing in for a radiating surface."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
 import numpy as np
 
+__all__ = ["Source"]
 
+
+@dataclass(frozen=True, eq=False)
 class Source:
     """A layer of point sources standing in for a radiating surface.
 
-    Takes an already discretised surface — points, normals and the area each
-    point represents — and places one point source behind each point, a short
+    Takes an already discretised surface -- points, normals and the area each
+    point represents -- and places one point source behind each point, a short
     distance ``rs`` along the local inward normal. The offset keeps sources
     away from the points where the boundary condition is imposed and from any
     point where the field is later evaluated. Because it follows the normal at
     each point individually, flat and curved surfaces are handled the same way.
 
     The class holds geometry and computes nothing else. It does not build the
-    mesh and does not know what shape the surface has. Source strengths are
-    unknown at this stage: `Solver` finds them by imposing the surface velocity
-    at ``points``, using ``positions`` as the origin of the field. SI units
-    throughout.
+    mesh and does not know what shape the surface has: it takes three arrays,
+    so ``Source(mesh.points, mesh.normals, mesh.cell_area)`` works without this
+    module importing the mesh module. It does not move the surface either; a
+    surface is placed and oriented before it becomes a source layer. Source
+    strengths are unknown at this stage; `Solver` finds them by imposing the
+    surface velocity at ``points``, using ``positions`` as the origin of the
+    field. SI units throughout.
+
+    Frozen because ``positions`` is derived. Rebinding ``points`` on a mutable
+    version leaves the sources radiating from where the surface used to be,
+    with no error anywhere along the way: the solver still solves and a field
+    still comes out. The arrays are also marked read-only, so writing into
+    them in place is refused too. To change anything, build another instance.
+
+    ``eq=False`` because a generated ``__eq__`` on a class holding arrays
+    raises on comparison, and ``frozen=True`` would advertise a ``__hash__``
+    that raises as well.
 
     Parameters
     ----------
@@ -25,7 +47,8 @@ class Source:
     normals : array_like, shape (N, 3)
         Unit normals at ``points``, pointing away from the surface into the
         fluid. Sources are placed on the opposite side, so a normal pointing
-        the wrong way puts its source in the fluid without raising an error.
+        the wrong way puts its source in the fluid rather than behind the
+        surface.
     cell_area : array_like, shape (N,) or scalar
         Surface area represented by each point. A scalar means every element
         has the same area and broadcasts against the other arrays.
@@ -35,22 +58,15 @@ class Source:
 
     Attributes
     ----------
-    points, normals, cell_area : ndarray
-        Copies of the inputs, marked read-only so that mutating them cannot
-        silently invalidate the derived arrays below.
-    rs : ndarray, shape (N,) or scalar
-        Retreat distance of each source. Equals the distance from a source
-        to its own surface point exactly, whatever the surface shape.
+    rs : ndarray
+        Retreat distance of each source, shape ``(N,)`` or zero-dimensional,
+        following ``cell_area``. Equals the distance from a source to its own
+        surface point exactly, whatever the surface shape.
     positions : ndarray, shape (N, 3)
         Where the sources radiate from, ``points - rs * normals``.
 
     Notes
     -----
-    ``rs`` and ``positions`` are computed once at construction and mean
-    something only alongside the ``points`` that produced them. Reassigning
-    an attribute afterwards leaves the object inconsistent; build a new
-    instance instead.
-
     ``alpha`` is a starting value, not a constant. Raising it degrades both
     field accuracy and the conditioning of the linear system; lowering it too
     far makes individual sources unstable. Values around 0.2-0.3 avoid both,
@@ -61,8 +77,8 @@ class Source:
     solving for them: sources and surface points coincide and the system is
     singular.
 
-    Inputs are not validated. A ``cell_area`` of the wrong length or a
-    normal that is not unit length will propagate silently.
+    Inputs are not validated. A ``cell_area`` of the wrong length or a normal
+    that is not unit length will propagate silently.
 
     References
     ----------
@@ -70,13 +86,28 @@ class Source:
     Wiley (2007).
     """
 
-    def __init__(self, points, normals, cell_area, alpha=0.25):
-        self.points = np.array(points, dtype=float)
-        self.normals = np.array(normals, dtype=float)
-        self.cell_area = np.array(cell_area, dtype=float)
+    points: np.ndarray
+    normals: np.ndarray
+    cell_area: np.ndarray
+    alpha: float = 0.25
 
-        for arr in (self.points, self.normals, self.cell_area):
-            arr.flags.writeable = False
+    def __post_init__(self) -> None:
+        points = np.array(self.points, dtype=np.float64)
+        normals = np.array(self.normals, dtype=np.float64)
+        cell_area = np.array(self.cell_area, dtype=np.float64)
 
-        self.rs = alpha * np.sqrt(self.cell_area)
-        self.positions = self.points - self.rs[..., None] * self.normals
+        # asarray, because alpha * sqrt(0-d array) comes back as a NumPy
+        # scalar rather than an array, and scalars carry no flags.
+        rs = np.asarray(self.alpha * np.sqrt(cell_area))
+        positions = points - rs[..., np.newaxis] * normals
+
+        for array in (points, normals, cell_area, rs, positions):
+            array.flags.writeable = False
+
+        # object.__setattr__ is `self.x = y` written the way a frozen
+        # dataclass allows: frozen blocks plain assignment even in here.
+        object.__setattr__(self, "points", points)
+        object.__setattr__(self, "normals", normals)
+        object.__setattr__(self, "cell_area", cell_area)
+        object.__setattr__(self, "rs", rs)
+        object.__setattr__(self, "positions", positions)
