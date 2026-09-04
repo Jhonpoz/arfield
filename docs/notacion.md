@@ -122,7 +122,13 @@ Hankel de primera especie de orden cero**, salvo constante.
 | `A` | vector de intensidades de las fuentes puntuales — **las incógnitas** | `A` |
 | `V` | vector de condiciones de frontera | `V` |
 | `r_s` | distancia a la que las fuentes se colocan **detrás** de la superficie | `r_s` |
-| `ΔS_m` | área del elemento de malla | `areas` |
+| `α` | fracción que fija ese retroceso, `r_s = α·√ΔS` | `alpha` |
+| `ΔS_m` | área del elemento de malla, `ΔS = S/N` | `areas` |
+| `d` | paso de discretización, espaciado a primer vecino | `pitch` |
+| `r_c` | radio del disco de área equivalente a la celda, `√(ΔS/π)` | `r_c` |
+| `R` | distancia de la fuente al borde de ese disco, `√(r_c² + r_s²)` | `R` |
+| `B` | lado derecho de la cuadratura de un punto, `r_c²/(2[1/r_s − 1/R])` | `B` |
+| `ξ*` | desplazamiento tangencial del punto de colocación, `√(B^{2/3} − r_s²)` | `xi` |
 | `n̂` | normal unitaria saliente en el punto de colocación | `normals` |
 | `M` | número de puntos objetivo (observación o colocación) | `n_targets` |
 | `N` | número de fuentes puntuales | `n_sources` |
@@ -161,6 +167,20 @@ segundo de dónde vienen las fuentes. Coincide con la forma `(M, N)` de `arfield
    que el libro**. Anotado a propósito.
 3. **`V` es el vector de condiciones de frontera en DPSM y el volumen de la
    partícula en Gor'kov.** En el código nunca se llaman igual: `V` y `volume`.
+
+### ❌ Colisión abierta — `B`
+
+`B` tiene dos significados en este proyecto, los dos propios, ninguno del libro:
+
+1. `B = −2iωρv₀`, la constante de la rama de **asignación** (§ «Dos usos
+   distintos de `A`», más abajo).
+2. `B = r_c²/(2[1/r_s − 1/R])`, el lado derecho de la **cuadratura de un
+   punto** (notas manuscritas, HALLAZGOS §2).
+
+No se cruzan en ninguna fórmula —la primera vive en la rama sin sistema
+lineal, la segunda en el ensamblaje— pero sí en la misma página cuando el
+Hito 1 compara las dos ramas. Sin resolver: renombrar una de las dos es
+decisión del autor.
 
 ### ⚠️ El factor 4π
 
@@ -363,3 +383,7 @@ Usar el índice analítico del final (p. 369), no el de contenidos. **Aviso**: e
 | 22 ago 2026 | índices `m`, `n` | libro: `m`=fuente, `n`=objetivo | `arfield`: `m`=objetivo, `n`=fuente | Cruzados a propósito, para que coincidan con `(M, N)` |
 | 22 ago 2026 | «matriz de influencia» | — | terminología del proyecto | El libro nunca las bautiza |
 | 22 ago 2026 | normalización de armónicos | atribuida al convenio temporal | convenio independiente | El temporal solo fija el sentido azimutal de `e^{imφ}` |
+| 3 sep 2026 | desplazamiento del punto representativo | `s` (HALLAZGOS), `xi_d` (ARQUITECTURA) | `ξ*`, `xi` en código | `s` se confundía con el subíndice de *source* (`r_s`, `A_S`, `M_SS`) |
+| 3 sep 2026 | radio equivalente de celda | `ρ_c` (HALLAZGOS) | `r_c` | `ρ` es la densidad del medio; `ρ_c` se leía como impedancia característica |
+| 3 sep 2026 | distancia al borde del disco | `R_c` (HALLAZGOS) | `R` | Notación del autor. `R₀`, radio de curvatura, sigue con subíndice |
+| 3 sep 2026 | paso de discretización | `p` (HALLAZGOS §2) | `d` | `p` es la presión acústica en la §2 de este documento |
