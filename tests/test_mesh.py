@@ -385,6 +385,47 @@ def test_normals_is_a_free_read_only_view():
     assert m.normals.base is not None
 
 
+@pytest.mark.parametrize(
+    ("plane", "expected"),
+    [("xy", [1, 0, 0]), ("xz", [1, 0, 0]), ("yz", [0, 1, 0])],
+)
+def test_tangent_is_a_unit_vector_in_the_surface(plane, expected):
+    """Perpendicular to the normal in every plane, and it is the first
+    in-plane axis. The `xz` case is the one that catches a tangent derived
+    from the normal by permutation: that normal is the middle axis and maps
+    to itself."""
+    m = mesh.circle(5e-3, 1e-3, plane=plane)
+    assert m.tangent == pytest.approx(expected)
+    assert np.linalg.norm(m.tangent) == pytest.approx(1.0)
+    assert float(m.normal @ m.tangent) == pytest.approx(0.0, abs=1e-15)
+
+
+@pytest.mark.parametrize(
+    "builder",
+    [
+        lambda p: mesh.circle(5e-3, 1e-3, plane=p),
+        lambda p: mesh.rectangle(4e-3, 3e-3, 1e-3, 1e-3, plane=p),
+        lambda p: mesh.polygon(SQUARE, 0.2, plane=p),
+    ],
+)
+@pytest.mark.parametrize("plane", ["xy", "xz", "yz"])
+def test_every_constructor_sets_a_valid_frame(builder, plane):
+    """The frame is built in _embed, so all three shapes must agree."""
+    m = builder(plane)
+    assert float(m.normal @ m.tangent) == pytest.approx(0.0, abs=1e-15)
+    assert np.linalg.norm(m.tangent) == pytest.approx(1.0)
+
+
+def test_tangents_is_a_free_read_only_view():
+    """Same broadcast trick as normals: no memory, and it widens to (K, 3)
+    for curved surfaces without any caller noticing."""
+    m = mesh.circle(1.0, 0.1)
+    assert m.tangents.shape == m.points.shape
+    assert not m.tangents.flags.writeable
+    assert m.tangents.base is not None
+    assert m.tangents.strides[0] == 0
+
+
 def test_mesh_is_frozen_at_both_levels():
     m = mesh.circle(1.0, 0.1)
     with pytest.raises(Exception):  # noqa: B017  FrozenInstanceError
@@ -393,7 +434,7 @@ def test_mesh_is_frozen_at_both_levels():
         m.points[0, 0] = 1.0
 
 
-def test_rotation_moves_points_and_normal_together():
+def test_rotation_moves_points_normal_and_tangent_together():
     """The failure this catches produces a field, not an exception."""
     m = mesh.circle(4.95e-3, 4e-4)
     matrix = mesh.rotation([1, 1, 0], np.deg2rad(35))
@@ -403,6 +444,13 @@ def test_rotation_moves_points_and_normal_together():
     assert np.abs(offset @ turned.normal).max() < 1e-14
     assert np.linalg.norm(turned.normal) == pytest.approx(1.0)
     assert m.normal == pytest.approx([0, 0, 1])
+
+    # The tangent has to travel with them. Forgetting it in `rotated` leaves
+    # a mesh whose frame is inconsistent and whose collocation points are
+    # displaced in a direction that is no longer in the surface.
+    assert turned.tangent == pytest.approx(matrix @ m.tangent)
+    assert float(turned.normal @ turned.tangent) == pytest.approx(0.0, abs=1e-14)
+    assert np.abs(offset @ turned.tangent).max() > 1e-6
 
 
 def test_rotation_preserves_the_invariant_fields_and_the_lattice():
@@ -415,6 +463,26 @@ def test_rotation_preserves_the_invariant_fields_and_the_lattice():
     before = np.linalg.norm(m.points[1] - m.points[0])
     after = np.linalg.norm(turned.points[1] - turned.points[0])
     assert after == pytest.approx(before)
+
+
+def test_the_frame_survives_a_chain_of_rotations():
+    """Round-off accumulates, so orthogonality is checked with a tolerance
+    and never against zero. An exact test passes on a fresh mesh and starts
+    rejecting valid ones here."""
+    m = mesh.circle(1.0, 0.1)
+    matrix = mesh.rotation([1, 1, 1], 0.7)
+    for _ in range(200):
+        m = m.rotated(matrix)
+    assert abs(float(m.normal @ m.tangent)) < 1e-9
+    assert np.linalg.norm(m.tangent) == pytest.approx(1.0)
+
+
+def test_translated_leaves_the_frame_alone():
+    """A translation moves points and nothing else."""
+    m = mesh.circle(1.0, 0.1)
+    shifted = m.translated([0.1, -0.2, 0.3])
+    assert np.array_equal(shifted.tangent, m.tangent)
+    assert np.array_equal(shifted.normal, m.normal)
 
 
 def test_non_orthogonal_matrix_raises():
@@ -444,7 +512,14 @@ def test_zero_axis_raises():
 
 def test_mesh_rejects_inconsistent_state():
     points = np.zeros((5, 3))
+    unit_z, unit_x = [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]
     with pytest.raises(ValueError, match="unit vector"):
-        mesh.Mesh(points, [0.0, 0.0, 2.0], 1.0, 1.0)
+        mesh.Mesh(points, [0.0, 0.0, 2.0], unit_x, 1.0, 1.0)
+    with pytest.raises(ValueError, match="unit vector"):
+        mesh.Mesh(points, unit_z, [3.0, 0.0, 0.0], 1.0, 1.0)
+    with pytest.raises(ValueError, match="perpendicular"):
+        mesh.Mesh(points, unit_z, unit_z, 1.0, 1.0)
+    with pytest.raises(ValueError, match="shape"):
+        mesh.Mesh(points, unit_z, [1.0, 0.0], 1.0, 1.0)
     with pytest.raises(ValueError, match="grid_shape"):
-        mesh.Mesh(points, [0.0, 0.0, 1.0], 1.0, 1.0, (2, 2))
+        mesh.Mesh(points, unit_z, unit_x, 1.0, 1.0, (2, 2))
