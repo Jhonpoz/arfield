@@ -9,12 +9,12 @@ Two return types, because there are two kinds of object.
 Surfaces
     ``circle``, ``rectangle`` and ``polygon`` return a `Mesh`: the points plus
     the small amount of state that only means something alongside them, namely
-    the surface normal, the area one cell stands for, the exact area of the
-    outline, and the grid shape when the points form one.
+    the surface normal, an in-plane tangent, the area one cell stands for,
+    the exact area of the outline, and the grid shape when the points form one.
 
 Paths
     ``line`` and ``arc`` return a plain ``(K, 3)`` array. A path has no cells,
-    no area and no normal; a `Mesh` with three empty fields would be the wrong
+    no area and no normal; a `Mesh` with four empty fields would be the wrong
     shape for it.
 
 Conventions
@@ -29,7 +29,8 @@ Surface plane
     ``'yz'``. This is an axis permutation, exact and free of trigonometry, and
     it covers observation planes as well as radiating surfaces. For any other
     orientation, build the surface in one of the three and call
-    `Mesh.rotated`; a rotation moves the points and the normal together.
+    `Mesh.rotated`; a rotation moves the points, the normal and the tangent
+    together.
 
 Boundary nodes
     A node lying on the outline of a shape, within a relative tolerance of
@@ -66,6 +67,12 @@ __all__ = [
 # Relative tolerance used to decide whether a node sits on a boundary.
 _RTOL = 1e-9
 
+# Absolute tolerance on the cosine between normal and tangent. Same scale as
+# the orthogonality check in `Mesh.rotated`, and for the same reason: it has
+# to absorb round-off from a chain of rotations without letting a genuinely
+# skewed frame through.
+_ATOL_ORTHOGONAL = 1e-9
+
 # In-plane axes and outward normal for each supported plane.
 _PLANES = {
     "xy": ((0, 1), (0.0, 0.0, 1.0)),
@@ -83,12 +90,14 @@ _PLANES = {
 class Mesh:
     """A discretised surface: points plus the state that belongs with them.
 
-    Frozen on purpose. Under a rotation ``points`` and ``normal`` both change
-    and must change together, while ``cell_area``, ``exact_area`` and
+    Frozen on purpose. Under a rotation ``points``, ``normal`` and ``tangent``
+    all change, and they are only meaningful together: a normal that no longer
+    matches its points, or a tangent that no longer matches its normal, is
+    wrong in a way that raises nothing. ``cell_area``, ``exact_area`` and
     ``grid_shape`` do not change at all. Freezing the object means the only
-    way to move a mesh is `rotated` or `translated`, which update the coupled
-    pair as a unit; rebinding ``points`` on its own is refused. The arrays are
-    additionally marked read-only, so that writing into them in place is
+    way to move a mesh is `rotated` or `translated`, which update the whole
+    frame as a unit; rebinding ``points`` on its own is refused. The arrays
+    are additionally marked read-only, so that writing into them in place is
     refused too. Both are one line to remove if they get in the way.
 
     ``eq=False`` is not decoration: a generated ``__eq__`` on a class holding
@@ -103,6 +112,21 @@ class Mesh:
         Unit normal of the surface, the same for every node because every
         surface this module builds is flat. Use `normals` for the per-node
         view that a curved surface would need.
+    tangent : ndarray, shape (3,)
+        Unit vector in the plane of the surface, perpendicular to `normal`;
+        the first in-plane axis of ``plane``. The tangent plane is
+        two-dimensional, so this is one arbitrary pick from a circle of
+        equally valid ones, and nothing downstream may depend on *which* one.
+        It exists for the one-point quadrature that imposes the boundary
+        condition as a cell average, where the collocation point sits a
+        distance ``xi`` from the cell centre along a tangent; on a hexagonal
+        lattice the representative point is a circle, so any tangent serves.
+
+        Stored rather than derived from `normal` on demand, for two reasons:
+        every closed-form recipe that reads only the normal degenerates for
+        some normal, and a stored vector rotates with the mesh while a derived
+        one would be recomputed from the rotated normal and come back
+        different.
     cell_area : float
         Area one node stands for, in square metres. A scalar because every
         lattice here is uniform. Consumers may multiply by it but must not
@@ -119,6 +143,7 @@ class Mesh:
 
     points: np.ndarray
     normal: np.ndarray
+    tangent: np.ndarray
     cell_area: float
     exact_area: float
     grid_shape: tuple[int, int] | None = None
@@ -128,14 +153,26 @@ class Mesh:
         # dataclass during construction; plain assignment would raise.
         points = np.ascontiguousarray(self.points, dtype=np.float64)
         normal = np.asarray(self.normal, dtype=np.float64)
+        tangent = np.asarray(self.tangent, dtype=np.float64)
 
         if points.ndim != 2 or points.shape[1] != 3:
             raise ValueError(f"points must have shape (K, 3), got {points.shape}")
-        if normal.shape != (3,):
-            raise ValueError(f"normal must have shape (3,), got {normal.shape}")
-        norm = float(np.linalg.norm(normal))
-        if not np.isclose(norm, 1.0):
-            raise ValueError(f"normal must be a unit vector, got norm {norm!r}")
+        for name, vector in (("normal", normal), ("tangent", tangent)):
+            if vector.shape != (3,):
+                raise ValueError(f"{name} must have shape (3,), got {vector.shape}")
+            norm = float(np.linalg.norm(vector))
+            if not np.isclose(norm, 1.0):
+                raise ValueError(f"{name} must be a unit vector, got norm {norm!r}")
+        # Absolute, and never == 0.0: both vectors are unit, so the dot
+        # product is a direction cosine and 1e-9 is a hard limit on the angle.
+        # An exact test would pass today, when every tangent is an axis
+        # vector, and start rejecting valid meshes the first time `rotated`
+        # leaves a residue of 1e-16.
+        cosine = float(np.dot(normal, tangent))
+        if abs(cosine) > _ATOL_ORTHOGONAL:
+            raise ValueError(
+                f"normal and tangent must be perpendicular, got cosine {cosine!r}"
+            )
         if not float(self.cell_area) > 0.0:
             raise ValueError(f"cell_area must be positive, got {self.cell_area!r}")
         if not float(self.exact_area) > 0.0:
@@ -150,8 +187,10 @@ class Mesh:
 
         points.flags.writeable = False
         normal.flags.writeable = False
+        tangent.flags.writeable = False
         object.__setattr__(self, "points", points)
         object.__setattr__(self, "normal", normal)
+        object.__setattr__(self, "tangent", tangent)
         object.__setattr__(self, "cell_area", float(self.cell_area))
         object.__setattr__(self, "exact_area", float(self.exact_area))
 
@@ -161,6 +200,7 @@ class Mesh:
     def __repr__(self) -> str:
         return (
             f"Mesh(K={len(self)}, normal={self.normal.tolist()}, "
+            f"tangent={self.tangent.tolist()}, "
             f"cell_area={self.cell_area:.4e}, area_ratio={self.area_ratio:.4f}, "
             f"grid_shape={self.grid_shape})"
         )
@@ -170,10 +210,23 @@ class Mesh:
         """Per-node view of `normal`, shape ``(K, 3)``.
 
         A broadcast view, not a copy: it costs no memory and is read-only.
-        This is what `Source` expects, so ``Source(m.points, m.normals,
-        m.cell_area)`` works without either module importing the other.
+        This is the form `Source` expects, so ``Source(m.points, m.normals,
+        m.tangents, m.cell_area)`` works without either module importing the
+        other.
         """
         return np.broadcast_to(self.normal, self.points.shape)
+
+    @property
+    def tangents(self) -> np.ndarray:
+        """Per-node view of `tangent`, shape ``(K, 3)``.
+
+        A broadcast view, exactly as `normals` is, and passed to `Source`
+        alongside it. Widening `tangent` to a genuine ``(K, 3)`` field for
+        curved surfaces leaves every caller of this property untouched, which
+        is the whole point of consumers reading the property and not the
+        field.
+        """
+        return np.broadcast_to(self.tangent, self.points.shape)
 
     @property
     def meshed_area(self) -> float:
@@ -197,9 +250,10 @@ class Mesh:
     def rotated(self, matrix: ArrayLike) -> Mesh:
         """Return a new mesh rotated by a ``(3, 3)`` matrix.
 
-        Points and normal are rotated by the same matrix. ``cell_area``,
-        ``exact_area`` and ``grid_shape`` are invariant under rotation, so
-        they are carried over untouched.
+        Points, normal and tangent are rotated by the same matrix, which is
+        what keeps them a consistent frame. ``cell_area``, ``exact_area`` and
+        ``grid_shape`` are invariant under rotation, so they are carried over
+        untouched.
 
         The rotation is about the origin. To rotate about another point,
         translate to it, rotate, translate back.
@@ -212,7 +266,12 @@ class Mesh:
             matrix @ matrix.T, np.eye(3), atol=1e-9
         ):
             raise ValueError("matrix must be orthogonal, or areas stop being areas")
-        return replace(self, points=self.points @ matrix.T, normal=matrix @ self.normal)
+        return replace(
+            self,
+            points=self.points @ matrix.T,
+            normal=matrix @ self.normal,
+            tangent=matrix @ self.tangent,
+        )
 
     def translated(self, offset: ArrayLike) -> Mesh:
         """Return a new mesh shifted by a ``(3,)`` offset. Nothing else moves."""
@@ -257,16 +316,26 @@ def _as_center(center: ArrayLike | None) -> np.ndarray:
 
 def _embed(
     u: np.ndarray, v: np.ndarray, plane: str, center: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    """Lift in-plane coordinates into 3-D and return the points and normal.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Lift in-plane coordinates into 3-D.
+
+    Returns the points, the outward normal and an in-plane tangent.
 
     ``u`` and ``v`` are the two in-plane coordinates in the order the plane
     name gives them, so for ``'xz'`` they are the ``x1`` and ``x3``
     components. This is a permutation of axes, not a rotation: exact, with no
     trigonometry and no orientation left undefined.
+
+    The tangent is the basis vector of the first in-plane axis. It is built
+    from the index rather than derived from the normal: a permutation applied
+    to the normal has a fixed point (``'xz'``, whose normal is the middle
+    axis, maps to itself), and every closed-form recipe that reads only the
+    normal degenerates somewhere. Reading the index cannot.
     """
     # A bad name raises KeyError naming it, which is guard enough.
     (axis_u, axis_v), normal = _PLANES[plane]
+    tangent = [0.0, 0.0, 0.0]
+    tangent[axis_u] = 1.0
 
     points = np.empty((u.size, 3), dtype=np.float64)
     points[:, axis_u] = u
@@ -274,7 +343,11 @@ def _embed(
     # The third axis holds only the offset; the surface is flat.
     points[:, 3 - axis_u - axis_v] = 0.0
     points += center
-    return points, np.array(normal, dtype=np.float64)
+    return (
+        points,
+        np.array(normal, dtype=np.float64),
+        np.array(tangent, dtype=np.float64),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -464,8 +537,8 @@ def circle(
     atol = _RTOL * radius
     inside = u**2 + v**2 <= (radius + atol) ** 2
 
-    points, normal = _embed(u[inside], v[inside], plane, center)
-    return Mesh(points, normal, cell, np.pi * radius**2)
+    points, normal, tangent = _embed(u[inside], v[inside], plane, center)
+    return Mesh(points, normal, tangent, cell, np.pi * radius**2)
 
 
 def rectangle(
@@ -498,8 +571,10 @@ def rectangle(
     n_u = 2 * int(np.floor(0.5 * width / du + _RTOL)) + 1
     n_v = 2 * int(np.floor(0.5 * height / dv + _RTOL)) + 1
 
-    points, normal = _embed(u, v, plane, center)
-    return Mesh(points, normal, rect_cell_area(du, dv), width * height, (n_u, n_v))
+    points, normal, tangent = _embed(u, v, plane, center)
+    return Mesh(
+        points, normal, tangent, rect_cell_area(du, dv), width * height, (n_u, n_v)
+    )
 
 
 def polygon(
@@ -541,8 +616,10 @@ def polygon(
     atol = _RTOL * float(np.max(half))
     inside = _points_in_polygon(candidates, vertices, atol)
 
-    points, normal = _embed(candidates[inside, 0], candidates[inside, 1], plane, center)
-    return Mesh(points, normal, cell, _shoelace_area(vertices))
+    points, normal, tangent = _embed(
+        candidates[inside, 0], candidates[inside, 1], plane, center
+    )
+    return Mesh(points, normal, tangent, cell, _shoelace_area(vertices))
 
 
 # --------------------------------------------------------------------------
