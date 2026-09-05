@@ -1,5 +1,7 @@
 import numpy as np
 
+__all__ = ["separation"]
+
 
 def separation(
     targets: np.ndarray, sources: np.ndarray

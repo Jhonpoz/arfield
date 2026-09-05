@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+__all__ = ["Medium"]
+
 
 @dataclass(frozen=True)
 class Medium:
