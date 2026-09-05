@@ -22,7 +22,7 @@ class Source:
     the normal at each point individually, flat and curved surfaces are
     handled the same way.
 
-    Each source is additionally displaced by ``xi`` along the local tangent.
+    Each collocation point is additionally displaced by ``xi`` along the local tangent.
     That distance is the one-point quadrature offset of `tangent_displacement`:
     it makes the boundary condition hold as an average over the cell rather
     than at its centre alone, which is what brings the solved branch from a
@@ -34,7 +34,7 @@ class Source:
     works without this module importing the mesh module. It does not move the
     surface either; a surface is placed and oriented before it becomes a
     source layer. Source strengths are unknown at this stage; `Solver` finds
-    them by imposing the surface velocity at ``points``, using ``positions``
+    them by imposing the surface velocity at ``collocation``, using ``positions``
     as the origin of the field. SI units throughout.
 
     Frozen because ``positions`` is derived. Rebinding ``points`` on a mutable
@@ -78,9 +78,16 @@ class Source:
     rs : ndarray
         Retreat distance of each source along the inward normal, shape
         ``(N,)`` or zero-dimensional, following ``cell_area``.
+    xi : ndarray
+        Tangential offset of each collocation point, shape ``(N,)`` or
+        zero-dimensional, following ``cell_area``.
     positions : ndarray, shape (N, 3)
         Where the sources radiate from,
-        ``points - rs * normals + xi * tangents``.
+        ``points - rs * normals``.
+    collocation : ndarray, shape (N, 3)
+        Points where the boundary condition is imposed,
+        offset tangentially from the surface by ``xi``:
+        ``points + xi * tangents``.
 
     Notes
     -----
@@ -112,19 +119,29 @@ class Source:
     alpha: float = 0.25
 
     def __post_init__(self) -> None:
-        points = np.array(self.points, dtype=np.float64)
-        normals = np.array(self.normals, dtype=np.float64)
-        tangents = np.array(self.tangents, dtype=np.float64)
-        cell_area = np.array(self.cell_area, dtype=np.float64)
+        points = np.array(self.points, dtype=np.float64, order="C")
+        normals = np.array(self.normals, dtype=np.float64, order="C")
+        tangents = np.array(self.tangents, dtype=np.float64, order="C")
+        cell_area = np.asarray(self.cell_area, dtype=np.float64)
 
         # asarray, because alpha * sqrt(0-d array) comes back as a NumPy
         # scalar, and a scalar has no .flags to clear below.
         rs = np.asarray(self.alpha * np.sqrt(cell_area))
         xi = np.asarray(tangent_displacement(rs, cell_area))
 
-        positions = points - rs[..., None] * normals + xi[..., None] * tangents
+        collocation = points + xi[..., None] * tangents
+        positions = points - rs[..., None] * normals
 
-        for array in (points, normals, tangents, cell_area, rs, xi, positions):
+        for array in (
+            points,
+            normals,
+            tangents,
+            cell_area,
+            rs,
+            xi,
+            positions,
+            collocation,
+        ):
             array.flags.writeable = False
 
         # object.__setattr__ is `self.x = y` written the way a frozen
@@ -136,6 +153,7 @@ class Source:
         object.__setattr__(self, "rs", rs)
         object.__setattr__(self, "xi", xi)
         object.__setattr__(self, "positions", positions)
+        object.__setattr__(self, "collocation", collocation)
 
 
 def tangent_displacement(rs: ArrayLike, cell_area: ArrayLike) -> np.ndarray:
