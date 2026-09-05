@@ -30,6 +30,7 @@
       "Kundu"
     ]
   },
+  "editor.rulers": [88],
   "[python]": {
     "editor.defaultFormatter": "charliermarsh.ruff",
     "editor.formatOnSave": true,
