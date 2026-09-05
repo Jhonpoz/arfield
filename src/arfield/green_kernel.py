@@ -6,6 +6,8 @@ with the e^{-i*omega*t} time convention (see docs/adr/0001-time-convention.md).
 
 import numpy as np
 
+__all__ = ["gradient_green", "green"]
+
 
 def green(r: np.ndarray, kf: float) -> np.ndarray:
     """Evaluate the Green's function G(r) = exp(i*kf*r) / (4*pi*r).

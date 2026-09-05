@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+__all__ = ["Particle"]
+
 
 @dataclass(frozen=True)
 class Particle:

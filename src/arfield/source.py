@@ -14,7 +14,7 @@ __all__ = ["Source", "tangent_displacement"]
 class Source:
     """A layer of point sources standing in for a radiating surface.
 
-    Takes an already discretised surface -- points, normals, tangents and the
+    Takes an already discretized surface -- points, normals, tangents and the
     area each point represents -- and places one point source behind each
     point, a short distance ``rs`` along the local inward normal. The offset
     keeps sources away from the points where the boundary condition is imposed
@@ -25,17 +25,18 @@ class Source:
     Each collocation point is additionally displaced by ``xi`` along the local tangent.
     That distance is the one-point quadrature offset of `tangent_displacement`:
     it makes the boundary condition hold as an average over the cell rather
-    than at its centre alone, which is what brings the solved branch from a
-    34 per cent error down to a few per cent.
+    than at its center alone, which is what brings the solved branch from a
+    34 percent error down to a few percent.
 
     The class holds geometry and computes nothing else. It does not build the
     mesh and does not know what shape the surface has: it takes four arrays,
     so ``Source(mesh.points, mesh.normals, mesh.tangents, mesh.cell_area)``
     works without this module importing the mesh module. It does not move the
     surface either; a surface is placed and oriented before it becomes a
-    source layer. Source strengths are unknown at this stage; `Solver` finds
-    them by imposing the surface velocity at ``collocation``, using ``positions``
-    as the origin of the field. SI units throughout.
+    source layer. Source strengths are unknown at this stage;
+    `solver.solve_strength` finds them by imposing the surface velocity at
+    ``collocation``, using ``positions`` as the origin of the field.
+    SI units throughout.
 
     Frozen because ``positions`` is derived. Rebinding ``points`` on a mutable
     version leaves the sources radiating from where the surface used to be,
@@ -162,7 +163,7 @@ def tangent_displacement(rs: ArrayLike, cell_area: ArrayLike) -> np.ndarray:
     A point source at a retreat distance ``rs`` behind the surface does not
     produce the same normal velocity everywhere on its cell: the velocity
     peaks right above the source and falls off across the cell. Imposing the
-    boundary condition at the cell centre therefore imposes the peak, not the
+    boundary condition at the cell center therefore imposes the peak, not the
     average, and the assembled system asks every source for too little
     strength. Evaluating instead at a point offset by the returned distance,
     tangentially, reproduces the average over the cell exactly, with a single
@@ -186,16 +187,16 @@ def tangent_displacement(rs: ArrayLike, cell_area: ArrayLike) -> np.ndarray:
     Parameters
     ----------
     rs : array_like
-        Retreat distance of the source behind the surface, in metres.
+        Retreat distance of the source behind the surface, in meters.
         Typically ``alpha * sqrt(cell_area)``.
     cell_area : array_like
-        Surface area the point stands for, in square metres. Broadcasts
+        Surface area the point stands for, in square meters. Broadcasts
         against ``rs``.
 
     Returns
     -------
     ndarray
-        The offset, in metres, in the same shape the inputs broadcast to.
+        The offset, in meters, in the same shape the inputs broadcast to.
 
     Notes
     -----
@@ -206,7 +207,7 @@ def tangent_displacement(rs: ArrayLike, cell_area: ArrayLike) -> np.ndarray:
 
     Any tangential direction gives the same result on a hexagonal lattice,
     where the locus of valid offsets is a circle. On a square lattice the
-    direction matters, and choosing it badly costs about 11 per cent.
+    direction matters, and choosing it badly costs about 11 percent.
 
     ``rs = 0`` divides by zero, which raises a NumPy warning and then returns
     0.0: with the source on the surface there is nothing to correct for. The

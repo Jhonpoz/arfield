@@ -5,7 +5,9 @@
     "arfield",
     "DPSM",
     "einsum",
+    "euler",
     "Gorkov",
+    "gradn",
     "numpy",
     "scipy"
   ],
