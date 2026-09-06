@@ -5,7 +5,7 @@ import numpy as np
 from .green_kernel import gradient_green, green
 from .pairwise import separation
 
-__all__ = ["compute_euler_gradn_green_TS", "compute_green_TS"]
+__all__ = ["compute_euler_gradn_green_TS", "compute_grad_green_TSj", "compute_green_TS"]
 
 
 def compute_green_TS(targets: np.ndarray, sources: np.ndarray, kf: float) -> np.ndarray:
@@ -44,12 +44,23 @@ def compute_green_TS(targets: np.ndarray, sources: np.ndarray, kf: float) -> np.
     the book's, although every field derived from them is.
 
     Separation returns unit vectors alongside the distances, and only the
-    distances are used here. The unused ``(M, N, 3)`` array is three times
-    the size of the distances and roughly doubles the peak allocation of
-    this call. It is left that way on purpose: sharing one separation
-    routine matters more than the allocation at the sizes this package
-    targets, and the trade is worth revisiting only when ``M * N`` grows
-    past about 1e7.
+    distances are used here. That unused ``(M, N, 3)`` float64 array costs
+    ``24 * M * N`` bytes, half again the size of the complex matrix being
+    returned, and it is the largest single allocation this call makes:
+    measured at ``M = 20000`` and ``N = 480``, the peak is 614 MB, of which
+    the unused array is 230 and the returned matrix 154. Quoted as a ratio
+    the figure moves with whatever else the kernel is holding at the time;
+    the bytes do not.
+
+    Binding it to ``_`` does not free it. The name is an ordinary local and
+    the array stays alive until this function returns. Python has no
+    equivalent of MATLAB's ``nargout``, so a callee cannot learn that one of
+    its outputs will be discarded and skip building it.
+
+    It is left this way on purpose: one separation routine shared by the
+    whole module is worth more than the allocation at the sizes this package
+    targets. The fix, on the day a machine runs out of room, is a
+    distances-only path in ``pairwise``, not a change here.
 
     Zero distance is not handled. Sources sit a distance ``rs`` behind the
     surface and collocation points are offset tangentially, so a target
@@ -63,6 +74,83 @@ def compute_green_TS(targets: np.ndarray, sources: np.ndarray, kf: float) -> np.
     """
     r_TS, _ = separation(targets, sources)
     return green(r_TS, kf)
+
+
+def compute_grad_green_TSj(
+    targets: np.ndarray, sources: np.ndarray, kf: float
+) -> np.ndarray:
+    """Green's gradient contributed by every point source at every target.
+
+    Entry ``(m, n, :)`` is the gradient of the Green's function between
+    target ``m`` and source ``n``, a vector per pair, so the array maps
+    source strengths to the pressure gradient. Contracting over sources
+    with strengths ``A`` of shape ``(N,)`` gives ``grad(p)`` of shape
+    ``(M, 3)``.
+
+    Unprojected, unlike ``compute_euler_gradn_green_TS``. Nothing picks a
+    direction here because there is no boundary condition being written: a
+    target is a point in the fluid, not a point on a surface, and it carries
+    no normal. That is why this function takes no ``normals``.
+
+    No medium either. The Euler factor is not applied and neither ``c`` nor
+    ``rho`` is asked for, because the array holds the bare kernel gradient,
+    which belongs to the Green's function and not to the fluid. Whoever
+    needs velocity divides by ``i * omega * rho`` once, after contracting,
+    which is ``3 * M`` operations instead of ``3 * M * N``.
+
+    Parameters
+    ----------
+    targets : ndarray, shape (M, 3)
+        Points where the gradient is evaluated, in meters. An arbitrary
+        cloud, unrelated to the sources; ``M`` need not equal ``N``.
+    sources : ndarray, shape (N, 3)
+        Point-source positions, in meters. For a surface these are the
+        retreated positions, ``Source.positions``, not the surface points.
+    kf : float
+        Wavenumber of the fluid, ``2 * pi / wavelength``, in rad/m.
+
+    Returns
+    -------
+    ndarray, shape (M, N, 3)
+        Complex128. Entries carry units of inverse length squared, so the
+        product with strengths in Pa*m gives a pressure gradient in Pa/m.
+
+    Notes
+    -----
+    The gradient is taken with respect to the *target* coordinate. Taken
+    with respect to the source it is the negative of this, and the two are
+    easy to confuse because the only visible difference is a sign that
+    survives every magnitude check.
+
+    Contract with ``grad.transpose(0, 2, 1) @ A``. The transpose is a view,
+    not a copy, and the product allocates only the result. ``tensordot`` and
+    the broadcasting form both materialize a temporary the size of the input
+    array, which at these shapes is the dominant allocation of the call.
+
+    This function is deliberately not the building block of
+    ``compute_euler_gradn_green_TS``. That one exists precisely because it
+    never materializes the ``(M, N, 3)`` array: it projects pair by pair and
+    keeps the peak at the size of the influence matrix. Rewriting it to call
+    this function and project afterwards would triple its memory and remove
+    its reason to exist. The two share a preamble of two lines, which is a
+    second repetition, and the rule of three says to leave it alone.
+
+    Memory is ``48 * M * N`` bytes, three times the influence matrix of the
+    same shape. This is the array that makes a volumetric evaluation
+    expensive, and the place where blocking over targets will be needed
+    first.
+
+    Zero distance is not handled, on the same construction argument as the
+    rest of the module: sources sit behind the surface, and a target that
+    coincides with one means that construction was bypassed.
+
+    References
+    ----------
+    Placko, D. and Kundu, T., *DPSM for Modeling Engineering Problems*,
+    Wiley (2007), chapter 1.
+    """
+    r_TS, e_TSj = separation(targets, sources)
+    return gradient_green(r_TS, e_TSj, kf)
 
 
 def compute_euler_gradn_green_TS(
@@ -148,5 +236,5 @@ def compute_euler_gradn_green_TS(
     r_TS, e_TSj = separation(targets, sources)
     grad_green_TSj = gradient_green(r_TS, e_TSj, kf)
     gradn_green_TS = np.einsum("mnj,mj->mn", grad_green_TSj, normals)
-    factor = 1j * kf * c * rho
-    return gradn_green_TS / factor
+    factor = 1 / (1j * kf * c * rho)
+    return gradn_green_TS * factor

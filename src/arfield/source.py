@@ -63,11 +63,13 @@ class Source:
         ``normals``, giving the direction of the ``xi`` displacement. Which
         tangent of the circle of valid ones is irrelevant on a hexagonal
         lattice, where the representative point of a cell is a circle; on a
-        square lattice it is not, and the wrong direction costs about 11 per
-        cent. `Mesh.tangents` supplies these.
+        square lattice it is not, and the wrong direction costs about 11
+        percent. `Mesh.tangents` supplies these.
     cell_area : array_like, shape (N,) or scalar
         Surface area represented by each point. A scalar means every element
-        has the same area and broadcasts against the other arrays.
+        has the same area and broadcasts against the other arrays. Use
+        `cell_areas` for the per-node view that a consumer needing one value
+        per source requires.
     alpha : float, optional
         Sets how far behind the surface the sources go, as a fraction of the
         element size: ``rs = alpha * sqrt(cell_area)``. Default 0.25. It also
@@ -102,10 +104,13 @@ class Source:
     solving for them: sources and surface points coincide and the system is
     singular; ``tangent_displacement`` warns about the division.
 
-    Inputs are not validated. A ``cell_area`` of the wrong length, a normal
-    that is not unit length, or a tangent that is not perpendicular to its
-    normal will all propagate silently. `Mesh` checks the last two at
-    construction; arrays assembled by hand are not checked anywhere.
+    Inputs are barely validated. A ``cell_area`` whose length disagrees with
+    ``points`` is the one mistake that stops here, and only as a side
+    effect: the broadcast that builds ``collocation`` cannot be done and
+    raises. A normal that is not unit length, and a tangent that is not
+    perpendicular to its normal, both propagate silently. `Mesh` checks
+    those two at construction; arrays assembled by hand are not checked
+    anywhere.
 
     References
     ----------
@@ -155,6 +160,25 @@ class Source:
         object.__setattr__(self, "xi", xi)
         object.__setattr__(self, "positions", positions)
         object.__setattr__(self, "collocation", collocation)
+
+    @property
+    def cell_areas(self) -> np.ndarray:
+        """Per-node view of `cell_area`, shape ``(N,)``.
+
+        A broadcast view, not a copy: it costs no memory and is read-only,
+        exactly as `Mesh.normals` is. Widening ``cell_area`` to a genuine
+        per-node field, which the first mesh with unequal cells will need,
+        leaves every caller of this property untouched.
+
+        It exists because a length has to come from somewhere.
+        `solver.rayleigh_strength` broadcasts its arguments, so a scalar
+        velocity and a scalar area give back a single number rather than one
+        strength per source, and `field.pressure` refuses that: matmul will
+        not take a zero-dimensional operand. Reading this instead of the
+        field supplies the ``N`` that neither argument carries. Nothing is
+        validated here that the constructor did not already refuse.
+        """
+        return np.broadcast_to(self.cell_area, self.points.shape[0])
 
 
 def tangent_displacement(rs: ArrayLike, cell_area: ArrayLike) -> np.ndarray:

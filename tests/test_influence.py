@@ -10,7 +10,11 @@ import numpy as np
 import pytest
 
 from arfield import mesh
-from arfield.influence import compute_euler_gradn_green_TS, compute_green_TS
+from arfield.influence import (
+    compute_euler_gradn_green_TS,
+    compute_grad_green_TSj,
+    compute_green_TS,
+)
 from arfield.source import Source
 
 # Air at 40 kHz, the working point of every milestone in this project.
@@ -277,3 +281,120 @@ def test_swapping_targets_and_sources_transposes_the_pressure_matrix():
     assert compute_green_TS(second, first, KF) == pytest.approx(
         compute_green_TS(first, second, KF).T
     )
+
+
+# --------------------------------------------------------------------------
+# the unprojected gradient
+# --------------------------------------------------------------------------
+
+
+def grad_green_by_hand(target, source, kf):
+    """grad G written out, with no package call in it."""
+    delta = target - source
+    r = np.linalg.norm(delta)
+    return green_by_hand(target, source, kf) * (1j * kf - 1.0 / r) * (delta / r)
+
+
+def test_grad_green_has_three_components_per_pair():
+    """The j axis is the whole difference from the projected matrix.
+
+    M and N differ so that a transposed pair of axes cannot pass, and the
+    third axis is checked by length rather than by position: an array of
+    shape (M, 3, N) would satisfy a test that only counted dimensions.
+    """
+    array = compute_grad_green_TSj(cloud(7, seed=20), cloud(4, seed=21, offset=0.3), KF)
+    assert array.shape == (7, 4, 3)
+    assert array.dtype == np.complex128
+
+
+def test_grad_green_entry_matches_the_closed_form():
+    """Every entry, one at a time, against G (i k - 1 / r) e_r."""
+    targets = cloud(5, seed=22)
+    sources = cloud(3, seed=23, offset=0.25)
+    array = compute_grad_green_TSj(targets, sources, KF)
+
+    expected = np.array(
+        [[grad_green_by_hand(t, s, KF) for s in sources] for t in targets]
+    )
+    assert array == pytest.approx(expected)
+
+
+def test_grad_green_is_radial():
+    """A spherically symmetric field has a gradient along the ray.
+
+    Isolates direction from magnitude. Two components swapped give a vector
+    of the same length pointing elsewhere, and nothing that looks at abs()
+    notices.
+    """
+    source = np.zeros((1, 3))
+    target = np.array([[0.013, -0.021, 0.034]])
+
+    entry = compute_grad_green_TSj(target, source, KF)[0, 0]
+    assert np.cross(entry, target[0]) == pytest.approx(np.zeros(3), abs=1e-9)
+
+
+def test_grad_green_matches_finite_differences_of_the_pressure_matrix():
+    """The gradient is the gradient of the matrix next to it in this module.
+
+    Ties the two assembly functions together without either one being the
+    other's reference implementation: compute_green_TS is differenced, and
+    the answer has to be what compute_grad_green_TSj returns.
+    """
+    targets = cloud(4, seed=24)
+    sources = cloud(3, seed=25, offset=0.25)
+    step = 1e-7
+
+    expected = np.empty((4, 3, 3), dtype=np.complex128)
+    for axis in range(3):
+        offset = np.zeros(3)
+        offset[axis] = step
+        ahead = compute_green_TS(targets + offset, sources, KF)
+        behind = compute_green_TS(targets - offset, sources, KF)
+        expected[:, :, axis] = (ahead - behind) / (2.0 * step)
+
+    array = compute_grad_green_TSj(targets, sources, KF)
+    assert array == pytest.approx(expected, rel=1e-6)
+
+
+def test_the_gradient_is_taken_at_the_target_not_at_the_source():
+    """Reciprocity with a sign: exchanging the clouds negates the transpose.
+
+    G depends on the distance alone, so its magnitude is symmetric, but the
+    gradient is not: differentiating with respect to the other end of the
+    pair reverses it. This is the assertion that fails if the unit vector in
+    separation ever points the other way, and it is the only error in the
+    package that leaves every magnitude untouched.
+    """
+    first = cloud(5, seed=26)
+    second = cloud(3, seed=27, offset=0.25)
+
+    forward = compute_grad_green_TSj(first, second, KF)
+    backward = compute_grad_green_TSj(second, first, KF)
+    assert backward == pytest.approx(-forward.transpose(1, 0, 2))
+
+
+def test_projecting_the_gradient_reproduces_the_euler_matrix():
+    """The two assembly routes agree, though neither calls the other.
+
+    compute_euler_gradn_green_TS projects pair by pair and never builds the
+    (M, N, 3) array; this checks that the shortcut is the same arithmetic
+    and not merely a plausible one. The tolerance is loose by machine
+    standards because the two sum three terms in different orders, which is
+    worth a couple of ulps and no more.
+    """
+    targets = cloud(6, seed=28)
+    normals = unit_rows(cloud(6, seed=29, spread=1.0, offset=1.0))
+    sources = cloud(4, seed=30, offset=0.25)
+
+    array = compute_grad_green_TSj(targets, sources, KF)
+    projected = np.einsum("mnj,mj->mn", array, normals) / (1j * KF * C * RHO)
+
+    expected = compute_euler_gradn_green_TS(targets, normals, sources, KF, C, RHO)
+    assert projected == pytest.approx(expected, rel=1e-13)
+
+
+def test_grad_green_accepts_read_only_inputs():
+    """Source.positions is frozen, and it is what this receives."""
+    m = disc()
+    layer = Source(m.points, m.normals, m.tangents, m.cell_area)
+    compute_grad_green_TSj(layer.collocation, layer.positions, KF)
