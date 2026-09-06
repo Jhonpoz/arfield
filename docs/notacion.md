@@ -119,7 +119,7 @@ Hankel de primera especie de orden cero**, salvo constante.
 | `p` | presión acústica (compleja) | `p` |
 | `v` | velocidad de partícula (vector complejo) | `v` |
 | `v₀` | amplitud de la velocidad normal prescrita en la cara del transductor | `v0` |
-| `A` | vector de intensidades de las fuentes puntuales — **las incógnitas** | `A` |
+| `A` | vector de intensidades de las fuentes puntuales. *Source strength* en el libro y en la literatura. Incógnitas en DPSM, asignadas en la rama Rayleigh | `source_strengths` |
 | `V` | vector de condiciones de frontera | `V` |
 | `r_s` | distancia a la que las fuentes se colocan **detrás** de la superficie | `r_s` |
 | `α` | fracción que fija ese retroceso, `r_s = α·√ΔS` | `alpha` |
@@ -127,7 +127,8 @@ Hankel de primera especie de orden cero**, salvo constante.
 | `d` | paso de discretización, espaciado a primer vecino | `pitch` |
 | `r_c` | radio del disco de área equivalente a la celda, `√(ΔS/π)` | `r_c` |
 | `R` | distancia de la fuente al borde de ese disco, `√(r_c² + r_s²)` | `R` |
-| `B` | lado derecho de la cuadratura de un punto, `r_c²/(2[1/r_s − 1/R])` | `B` |
+| `B` | **(libro, Ec. 1.16a)** constante de la rama asignada, `−2iωρv₀` | — |
+| `B` | **(propio)** lado derecho de la cuadratura de un punto, `r_c²/(2[1/r_s − 1/R])`. Colisiona con el anterior; se renombra | `B` |
 | `ξ*` | desplazamiento tangencial del punto de colocación, `√(B^{2/3} − r_s²)` | `xi` |
 | `n̂` | normal unitaria saliente en el punto de colocación | `normals` |
 | `M` | número de puntos objetivo (observación o colocación) | `n_targets` |
@@ -168,27 +169,39 @@ segundo de dónde vienen las fuentes. Coincide con la forma `(M, N)` de `arfield
 3. **`V` es el vector de condiciones de frontera en DPSM y el volumen de la
    partícula en Gor'kov.** En el código nunca se llaman igual: `V` y `volume`.
 
-### ❌ Colisión abierta — `B`
+### ⚠️ Colisión de `B` — resuelta a favor del libro **[F]**
 
-`B` tiene dos significados en este proyecto, los dos propios, ninguno del libro:
+`B` tiene dos significados en este proyecto. Hasta el 5 sep 2026 este
+documento afirmaba que los dos eran propios y ninguno del libro. **Es falso**,
+verificado abriendo el capítulo:
 
-1. `B = −2iωρv₀`, la constante de la rama de **asignación** (§ «Dos usos
-   distintos de `A`», más abajo).
+1. `B = −2iωρv₀` **es del libro**. Aparece en la Ec. (1.14a) como constante
+   proporcional a la amplitud de velocidad de la fuente, y queda evaluada en
+   la **Ec. (1.16a)**. También sale en la Ec. (1.25h).
 2. `B = r_c²/(2[1/r_s − 1/R])`, el lado derecho de la **cuadratura de un
-   punto** (notas manuscritas, HALLAZGOS §2).
+   punto**, sí es propio (notas manuscritas, HALLAZGOS §2).
 
-No se cruzan en ninguna fórmula —la primera vive en la rama sin sistema
-lineal, la segunda en el ensamblaje— pero sí en la misma página cuando el
-Hito 1 compara las dos ramas. Sin resolver: renombrar una de las dos es
-decisión del autor.
+Eso decide cuál se renombra: el símbolo externo se respeta, y el que cambia de
+nombre es el segundo. Renombrarlo es barato porque no sale de este proyecto —
+hoy vive en `tangent_displacement`, en su docstring y en HALLAZGOS §2. El
+nombre nuevo está sin decidir.
 
-### ⚠️ El factor 4π
+### ⚠️ El factor 4π — el libro usa las dos convenciones **[F]**
 
-La `Q` del libro es `e^{ikr}/r`, **sin** el `1/(4π)`; el libro lo absorbe en las
-`A`. El `green_TS` de `arfield` **sí** lo lleva, por el convenio de la §1.
+No es que el libro omita el `1/(4π)`: lo mueve, y en una sola página.
 
-Misma cantidad física, escala distinta. Consecuencia práctica: `p` sale igual,
-pero **los valores de `A` no son comparables directamente con los del libro**.
+- **Ec. (1.14a)**: `p = ∫ B · e^{ikr}/(4πr) dS`. El `4π` va **dentro** del
+  núcleo. Ese es exactamente el `green` de `arfield`.
+- **Ec. (1.14b)** y de ahí en adelante, incluida la `Q` de la Ec. (1.25j):
+  el núcleo pasa a ser `e^{ikr}/r` y el `4π` se absorbe en las `A`.
+
+`arfield` se quedó con el núcleo de la (1.14a). Consecuencia directa, y es la
+que importa en el Hito 1: **la rama de asignación no lleva `4π`**. Ver la tabla
+de abajo.
+
+Misma cantidad física, escala distinta. Las `A` de `arfield` y las de las
+Ecs. (1.14b) en adelante difieren por `4π` y no son comparables cifra a cifra;
+todo campo derivado de ellas sí lo es.
 
 ### ⚠️ «Matriz de influencia» no es del libro
 
@@ -200,13 +213,34 @@ El término es del proyecto, no una traducción.
 
 ### Dos usos distintos de `A`
 
-| Formulación | Cómo se obtienen las `A` |
-|---|---|
-| Rayleigh–Sommerfeld discretizado | **Asignadas**: `A_m = B·ΔS_m/4π` con `B = −2iωρv₀`. Sin sistema lineal. |
-| DPSM | **Incógnitas**: salen de resolver el sistema imponiendo la condición de frontera |
+| Formulación | Cómo se obtienen las `A` | En `arfield` |
+|---|---|---|
+| Rayleigh–Sommerfeld discretizado | **Asignadas**, sin sistema lineal | `solver.rayleigh_strength` |
+| DPSM | **Incógnitas**, de imponer la condición de frontera | `solver.solve_strength` |
 
-Las dos aparecen en la Fig. 1.35 del libro, y en el Hito 1 se calculan ambas. No
-confundirlas: la primera solo vale para pistón plano en pantalla infinita.
+**La fórmula, en la convención de `arfield`** —núcleo con `1/(4π)` dentro, o sea
+la Ec. (1.14a)—:
+
+```
+A_m = B · ΔS_m = −2iωρ · v₀ · ΔS_m         con ω = k_f·c
+```
+
+**Sin `4π`.** El `A_m = B·S_m/4π` de la Ec. (1.25h) del libro está en la otra
+convención, la de la (1.14b). Medido sobre el pistón de `tests/test_piston.py`:
+el cociente rama resuelta / rama asignada da **1.064** con esta fórmula y
+**13.371** —o sea `4π`— con el `4π` de más. **[M]**
+
+Las dos ramas aparecen en la Fig. 1.35 y en el Hito 1 se calculan ambas.
+
+**Qué las restringe, y no es lo que parece [F].** No es la planitud: §1.3.3 del
+libro invoca a O'Neil (1949) para sostener que la misma integral vale sobre una
+superficie de curvatura suave, y de ahí que el casquete focalizado de la
+Ec. (1.32) también admita rama asignada. Tampoco es que `v₀` sea uniforme: la
+Ec. (1.15) admite `v₃(y)` arbitraria, que es lo que deja pasar un arreglo en
+fase. Lo que restringe es el **bafle rígido infinito**: el factor 2 de `B` es la
+imagen del semiespacio. Una esfera pulsante radia a espacio libre y no lo tiene
+— medido, la asignación la sobrestima exactamente ×2 en el límite cuasiestático
+y ×7.5 con `ka = 3.6`. **[M]**
 
 ### Fuentes triplete — no se usan ✅
 
