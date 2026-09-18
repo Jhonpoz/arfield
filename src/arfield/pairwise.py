@@ -11,7 +11,80 @@ No physics, no wavenumber, no medium: this is arithmetic on points.
 
 import numpy as np
 
-__all__ = ["separation"]
+__all__ = ["separation", "separation_distance"]
+
+
+def _difference(targets: np.ndarray, sources: np.ndarray) -> np.ndarray:
+    """Difference vector from every source to every target.
+
+    The only place in the package where coordinates are subtracted, and the
+    only place where their dtype is decided: integer input is converted to
+    ``float64`` here so that both public functions behave the same. Change
+    that policy here and nowhere else.
+
+    Parameters
+    ----------
+    targets : array_like, shape (M, 3)
+        Points ``x_T``, in meters.
+    sources : array_like, shape (N, 3)
+        Points ``y_S``, in meters.
+
+    Returns
+    -------
+    ndarray, shape (M, N, 3)
+        ``x_T - y_S``, float64, from source to target. Newly allocated;
+        callers may modify it in place.
+    """
+    targets = np.asarray(targets, dtype=np.float64)
+    sources = np.asarray(sources, dtype=np.float64)
+    return targets[:, None, :] - sources[None, :, :]
+
+
+def _distance(R_TSj: np.ndarray) -> np.ndarray:
+    """Euclidean norm of a difference array along its last axis.
+
+    Written as a self-contraction rather than ``np.linalg.norm`` so that no
+    second ``(M, N, 3)`` array is built; see the notes in `separation`.
+
+    Parameters
+    ----------
+    R_TSj : ndarray, shape (M, N, 3)
+        Difference vectors, float64.
+
+    Returns
+    -------
+    ndarray, shape (M, N)
+        ``|R_TSj|``, float64.
+    """
+    return np.sqrt(np.einsum("mnj,mnj->mn", R_TSj, R_TSj))
+
+
+def separation_distance(targets: np.ndarray, sources: np.ndarray) -> np.ndarray:
+    """Distance from every source to every target, without the direction.
+
+    Same distances as `separation` returns first, bit for bit, for callers
+    that need only ``r_TS`` -- `influence.compute_green_TS` among them.
+    The ``(M, N, 3)`` difference array is still built, but it is dropped on
+    return instead of being turned into unit vectors and handed back, which
+    is the whole point of this function.
+
+    This does not call `separation`, and `separation` does not call this:
+    each needs its own difference array, and the one built here is not
+    reused for anything.
+
+    Parameters
+    ----------
+    targets : array_like, shape (M, 3)
+        Points ``x_T`` where the field is evaluated, in meters.
+    sources : array_like, shape (N, 3)
+        Point-source positions ``y_S``, in meters.
+
+    Returns
+    -------
+    ndarray, shape (M, N)
+        ``|x_T - y_S|``, float64, in meters.
+    """
+    return _distance(_difference(targets, sources))
 
 
 def separation(
@@ -31,9 +104,9 @@ def separation(
 
     Parameters
     ----------
-    targets : ndarray, shape (M, 3)
+    targets : array_like, shape (M, 3)
         Points ``x_T`` where the field is evaluated, in meters.
-    sources : ndarray, shape (N, 3)
+    sources : array_like, shape (N, 3)
         Point-source positions ``y_S``, in meters.
 
     Returns
@@ -45,10 +118,8 @@ def separation(
 
     Notes
     -----
-    Integer input raises. The unit vectors are produced by dividing the
-    difference array in place, and NumPy refuses to write float results
-    into an integer array; the error message names the cast. Passing
-    coordinates as ``float64`` avoids it.
+    Integer input is converted to ``float64`` in `_difference`; both public
+    functions of this module share that policy.
 
     Coincident points are not handled. ``r_TS`` comes back as zero and the
     corresponding unit vector as ``nan``, after a division warning. Nothing
@@ -83,8 +154,7 @@ def separation(
     inputs. Reference data generated before this changed needs
     regenerating, and comparisons against it need a tolerance.
     """
-    e_TSj = targets[:, None, :] - sources[None, :, :]
-    r_TS = np.sqrt(np.einsum("mnj,mnj->mn", e_TSj, e_TSj))
-    e_TSj /= r_TS[:, :, None]  # in place: no second (M, N, 3) array
-
+    e_TSj = _difference(targets, sources)
+    r_TS = _distance(e_TSj)
+    e_TSj /= r_TS[:, :, None]
     return r_TS, e_TSj

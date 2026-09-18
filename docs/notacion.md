@@ -119,7 +119,7 @@ Hankel de primera especie de orden cero**, salvo constante.
 | `p` | presión acústica (compleja) | `p` |
 | `v` | velocidad de partícula (vector complejo) | `v` |
 | `v₀` | amplitud de la velocidad normal prescrita en la cara del transductor | `v0` |
-| `A` | vector de intensidades de las fuentes puntuales. *Source strength* en el libro y en la literatura. Incógnitas en DPSM, asignadas en la rama Rayleigh | `source_strengths` |
+| `A` | vector de intensidades de las fuentes puntuales — **las incógnitas** | `A` |
 | `V` | vector de condiciones de frontera | `V` |
 | `r_s` | distancia a la que las fuentes se colocan **detrás** de la superficie | `r_s` |
 | `α` | fracción que fija ese retroceso, `r_s = α·√ΔS` | `alpha` |
@@ -127,8 +127,7 @@ Hankel de primera especie de orden cero**, salvo constante.
 | `d` | paso de discretización, espaciado a primer vecino | `pitch` |
 | `r_c` | radio del disco de área equivalente a la celda, `√(ΔS/π)` | `r_c` |
 | `R` | distancia de la fuente al borde de ese disco, `√(r_c² + r_s²)` | `R` |
-| `B` | **(libro, Ec. 1.16a)** constante de la rama asignada, `−2iωρv₀` | — |
-| `B` | **(propio)** lado derecho de la cuadratura de un punto, `r_c²/(2[1/r_s − 1/R])`. Colisiona con el anterior; se renombra | `B` |
+| `B` | lado derecho de la cuadratura de un punto, `r_c²/(2[1/r_s − 1/R])` | `B` |
 | `ξ*` | desplazamiento tangencial del punto de colocación, `√(B^{2/3} − r_s²)` | `xi` |
 | `n̂` | normal unitaria saliente en el punto de colocación | `normals` |
 | `M` | número de puntos objetivo (observación o colocación) | `n_targets` |
@@ -169,39 +168,27 @@ segundo de dónde vienen las fuentes. Coincide con la forma `(M, N)` de `arfield
 3. **`V` es el vector de condiciones de frontera en DPSM y el volumen de la
    partícula en Gor'kov.** En el código nunca se llaman igual: `V` y `volume`.
 
-### ⚠️ Colisión de `B` — resuelta a favor del libro **[F]**
+### ❌ Colisión abierta — `B`
 
-`B` tiene dos significados en este proyecto. Hasta el 5 sep 2026 este
-documento afirmaba que los dos eran propios y ninguno del libro. **Es falso**,
-verificado abriendo el capítulo:
+`B` tiene dos significados en este proyecto, los dos propios, ninguno del libro:
 
-1. `B = −2iωρv₀` **es del libro**. Aparece en la Ec. (1.14a) como constante
-   proporcional a la amplitud de velocidad de la fuente, y queda evaluada en
-   la **Ec. (1.16a)**. También sale en la Ec. (1.25h).
+1. `B = −2iωρv₀`, la constante de la rama de **asignación** (§ «Dos usos
+   distintos de `A`», más abajo).
 2. `B = r_c²/(2[1/r_s − 1/R])`, el lado derecho de la **cuadratura de un
-   punto**, sí es propio (notas manuscritas, HALLAZGOS §2).
+   punto** (notas manuscritas, HALLAZGOS §2).
 
-Eso decide cuál se renombra: el símbolo externo se respeta, y el que cambia de
-nombre es el segundo. Renombrarlo es barato porque no sale de este proyecto —
-hoy vive en `tangent_displacement`, en su docstring y en HALLAZGOS §2. El
-nombre nuevo está sin decidir.
+No se cruzan en ninguna fórmula —la primera vive en la rama sin sistema
+lineal, la segunda en el ensamblaje— pero sí en la misma página cuando el
+Hito 1 compara las dos ramas. Sin resolver: renombrar una de las dos es
+decisión del autor.
 
-### ⚠️ El factor 4π — el libro usa las dos convenciones **[F]**
+### ⚠️ El factor 4π
 
-No es que el libro omita el `1/(4π)`: lo mueve, y en una sola página.
+La `Q` del libro es `e^{ikr}/r`, **sin** el `1/(4π)`; el libro lo absorbe en las
+`A`. El `green_TS` de `arfield` **sí** lo lleva, por el convenio de la §1.
 
-- **Ec. (1.14a)**: `p = ∫ B · e^{ikr}/(4πr) dS`. El `4π` va **dentro** del
-  núcleo. Ese es exactamente el `green` de `arfield`.
-- **Ec. (1.14b)** y de ahí en adelante, incluida la `Q` de la Ec. (1.25j):
-  el núcleo pasa a ser `e^{ikr}/r` y el `4π` se absorbe en las `A`.
-
-`arfield` se quedó con el núcleo de la (1.14a). Consecuencia directa, y es la
-que importa en el Hito 1: **la rama de asignación no lleva `4π`**. Ver la tabla
-de abajo.
-
-Misma cantidad física, escala distinta. Las `A` de `arfield` y las de las
-Ecs. (1.14b) en adelante difieren por `4π` y no son comparables cifra a cifra;
-todo campo derivado de ellas sí lo es.
+Misma cantidad física, escala distinta. Consecuencia práctica: `p` sale igual,
+pero **los valores de `A` no son comparables directamente con los del libro**.
 
 ### ⚠️ «Matriz de influencia» no es del libro
 
@@ -213,34 +200,13 @@ El término es del proyecto, no una traducción.
 
 ### Dos usos distintos de `A`
 
-| Formulación | Cómo se obtienen las `A` | En `arfield` |
-|---|---|---|
-| Rayleigh–Sommerfeld discretizado | **Asignadas**, sin sistema lineal | `solver.rayleigh_strength` |
-| DPSM | **Incógnitas**, de imponer la condición de frontera | `solver.solve_strength` |
+| Formulación | Cómo se obtienen las `A` |
+|---|---|
+| Rayleigh–Sommerfeld discretizado | **Asignadas**: `A_m = B·ΔS_m/4π` con `B = −2iωρv₀`. Sin sistema lineal. |
+| DPSM | **Incógnitas**: salen de resolver el sistema imponiendo la condición de frontera |
 
-**La fórmula, en la convención de `arfield`** —núcleo con `1/(4π)` dentro, o sea
-la Ec. (1.14a)—:
-
-```
-A_m = B · ΔS_m = −2iωρ · v₀ · ΔS_m         con ω = k_f·c
-```
-
-**Sin `4π`.** El `A_m = B·S_m/4π` de la Ec. (1.25h) del libro está en la otra
-convención, la de la (1.14b). Medido sobre el pistón de `tests/test_piston.py`:
-el cociente rama resuelta / rama asignada da **1.064** con esta fórmula y
-**13.371** —o sea `4π`— con el `4π` de más. **[M]**
-
-Las dos ramas aparecen en la Fig. 1.35 y en el Hito 1 se calculan ambas.
-
-**Qué las restringe, y no es lo que parece [F].** No es la planitud: §1.3.3 del
-libro invoca a O'Neil (1949) para sostener que la misma integral vale sobre una
-superficie de curvatura suave, y de ahí que el casquete focalizado de la
-Ec. (1.32) también admita rama asignada. Tampoco es que `v₀` sea uniforme: la
-Ec. (1.15) admite `v₃(y)` arbitraria, que es lo que deja pasar un arreglo en
-fase. Lo que restringe es el **bafle rígido infinito**: el factor 2 de `B` es la
-imagen del semiespacio. Una esfera pulsante radia a espacio libre y no lo tiene
-— medido, la asignación la sobrestima exactamente ×2 en el límite cuasiestático
-y ×7.5 con `ka = 3.6`. **[M]**
+Las dos aparecen en la Fig. 1.35 del libro, y en el Hito 1 se calculan ambas. No
+confundirlas: la primera solo vale para pistón plano en pantalla infinita.
 
 ### Fuentes triplete — no se usan ✅
 
@@ -266,6 +232,11 @@ Cerrados en el ADR 0002. `M` = puntos objetivo, `N` = fuentes. Siempre en ese or
 | `green_TS` | `(M, N)` | `G(R) = e^{ikR}/(4πR)` tabulada |
 | `grad_green_TSj` | `(M, N, 3)` | `∇G`, componentes cartesianas en el tercer eje |
 | `euler_gradn_green_TS` | `(M, N)` | `n̂·∇G/(iωρ)` — la matriz del sistema lineal |
+| `r_TS` | `(M, N)` | distancia `|x_T − y_S|`, float64; `pairwise.separation` y `pairwise.separation_distance` |
+| `e_TSj` | `(M, N, 3)` | versor de la fuente al objetivo, `(x_T − y_S)/r_TS`; solo `separation` |
+| `h_TS` | `(M, N)` | `h = (dG/dr)/r`, de modo que `∇G = R·h`; `green_kernel.aux_fun_h` |
+| `s_TS` | `(M, N)` | `s = k²G + 3h`, escalar del término externo de la Hessiana; `green_kernel.aux_fun_s` |
+| `hess_green_TSij` | `(M, N, 3, 3)` | `∂_i∂_jG = δ_ij·h − e_ie_j·s`; `green_kernel.hessian_green`. Solo tests y `M = 1`; en campo se contrae con `A` sin materializarla (ADR 0012) |
 | posiciones | `(N, 3)` o `(M, 3)` | puntos o fuentes, lista plana |
 | `A` | `(N,)` | intensidades |
 | `V` | `(M,)` | condiciones de frontera |
@@ -282,6 +253,21 @@ Cerrados en el ADR 0002. `M` = puntos objetivo, `N` = fuentes. Siempre en ese or
   `S`) del índice de componente (`j`).
 - `euler` = pasó por `ρ ∂v/∂t = −∇p`, que es lo único que introduce `1/(iωρ)`.
 - `gradn` = gradiente proyectado sobre la normal.
+- **Dos ejes de componente, dos letras**: `ij` marca `(…, 3, 3)`, como `j` marca
+  `(…, 3)`.
+- **Sufijo `_from` en `green_kernel`** (ADR 0012): la función recibe su
+  predecesor inmediato en la cadena ya evaluado y no calcula nada dos veces.
+  La versión sin sufijo recibe `r`, se lee como la fórmula, y siempre llama a
+  la `_from`. Cadena: `g → dgdr → {grad, h} → s → hess`.
+- **`aux_fun_h`, `aux_fun_s`**: dos escalares sin nombre en la literatura, por
+  letra como en `gorkov_dpsm.pdf` §7.3. La letra es lo que importa; el prefijo
+  es del autor. Definidos una vez en el docstring del módulo.
+- **`separation_distance`** (ADR 0013): solo `r_TS`, sin versores; la ruta de
+  `compute_green_TS` y de cualquiera que no necesite dirección. Sustantivo sin
+  verbo, como `separation`.
+- **«Punto a punto» no se usa.** Las funciones de `green_kernel` son *elemento a
+  elemento* sobre `r` de cualquier forma: `()`, `(N,)`, `(M, N)`. Con un solo
+  punto de observación `r` es `(1, N)`, no un escalar.
 
 Nombres empiezan en minúscula a propósito: la regla `N806` de Ruff (`pep8-naming`)
 marcaría `G_TS`. Verificado — `N` no está en el conjunto por defecto de Ruff, pero
@@ -316,45 +302,108 @@ componentes, no la proyección normal.
 
 ## 5. Símbolos de armónicos esféricos / GLMT
 
-Pendiente de completar en el Hito 6. Verificado del código de Baresch:
+Verificado del código de Baresch y de Zhao, Thomas & Marchiano (JASA 146, 2019),
+que es del mismo grupo. Detalle y procedencia en `actweez_col_REFERENCIA.md` §9.
 
 | Elemento | En `actweez_col` | Nota | Estado |
 |---|---|---|---|
-| Coeficientes de expansión | `Anm` | vector disperso indexado por `ci` | ✅ |
+| Coeficientes de expansión | `Anm` | vector indexado por `ci` | ✅ |
 | Índice combinado | `ci = n*(n+1) + m` | `combined_index.m`, del *Optical Tweezers Toolbox* (UQ, 2006) | ✅ |
-| Truncamiento | `Nmax` | | ✅ |
+| Truncamiento | `Nmax` | partícula: `ka + 3(ka)^{1/3}`, mínimo 30 si sale < 15; haz: 100 | ✅ |
 | Hankel esférica 1ª especie | `sbesselh1_diego.m` | la saliente bajo `e^{-iωt}` | ✅ |
-| Elevación / azimut | `alpha` / `beta` | comentarios en francés | ✅ |
+| Elevación / azimut | `alpha` / `beta` | firma `plane_wave(Nmax, alpha, beta)`; `force_mie.m` los etiqueta al revés | ✅ |
+| Coeficiente de dispersión | `T` de `T_matrix.m` | `S_n = −(F_n j_n − x j_n')/(F_n h_n − x h_n')`; sin pérdidas, `\|1 + 2S_n\| = 1` | ✅ |
 
-### ❌ Discrepancia abierta — normalización de armónicos
+### Qué se expande ✅
 
-Las instrucciones afirmaban que el paper usa armónicos **sin normalizar**
-(`Y_nm = P_n^m(cosθ)·e^{imφ}`). El código dice otra cosa: en `plane_wave.m`,
+**La presión**, no el potencial de velocidad:
 
-```matlab
-Pnm = legendre(n,cos(alpha),'norm');
-Pnm = sqrt(2/(4*pi))*Pnm;   % rectificación de la normalización 'norm'
+```
+p = p₀ · Σ_n Σ_m A_nm · j_n(kr) · Y_nm(θ, φ) · e^{−iωt}      (Zhao 2019, Ec. 4)
 ```
 
-Baresch parte de la normalización de MATLAB y la **rectifica a armónicos
-completamente normalizados**. Sus `Anm` están definidos contra esa base.
+`incident_fields.m` reconstruye su mapa de presión con la misma suma. **[F]**
 
-También hay tratamiento explícito de `m < 0`:
+> **Corrección del 15 sep 2026.** Esta sección decía que el paper expande `φ` y
+> que olvidar `φ = p/(iωρ)` escalaría la fuerza. Ni el código ni Zhao expanden
+> `φ`. Y aunque se expandiera, una constante compleja global `c` sale como `|c|²`
+> en la fuerza, que es cuadrática en los `A_nm`, y la absorbe `p₀`. La trampa no
+> aplicaba.
 
-```matlab
-if m<0
-    Anm(ii) = Anm(ii)*(-1)^m;
-end
+### Normalización ✅
+
+```
+Y_nm = √[(2n+1)/(4π) · (n−m)!/(n+m)!] · P_n^m(cos θ) · e^{imφ}      (Zhao 2019, Ec. 5)
 ```
 
-que hay que rastrear hasta Condon–Shortley antes de comparar nada.
-**No resolver antes del Hito 6.**
+`plane_wave.m` y `quad_legendre.m` hacen `legendre(n,x,'norm')·√(2/4π)`; como
+`'norm'` trae `√(n+½)`, el producto es `√((2n+1)/4π)`. Coinciden. **[F]**
 
-### ⚠️ Trampa de magnitud
+**Distinta de los papers de 2013.** Zhao, líneas 101–102: por usar esta
+normalización, sus `A_nm` difieren de los de Baresch JASA 133 (2013) y JAP 113
+(2013). **[F]** No es una constante global: deforma el peso entre órdenes, y
+`p₀` no la absorbe.
 
-El paper expande el **potencial de velocidad `φ`**, no la presión. El DPSM entrega
-`p`. El factor de conversión es constante (`φ = p/(iωρ)`) pero olvidarlo escala la
-fuerza. Verificar antes de comparar contra la Fig. 1(a).
+> **Corrección del 16 sep 2026.** La «❌ Discrepancia abierta» de esta sección
+> queda resuelta: las dos afirmaciones que chocaban eran ciertas de fuentes
+> distintas.
+
+### Fase de Condon–Shortley ⚠️ — el código de Baresch NO la lleva
+
+Verificado contra la documentación oficial de `legendre` de MATLAB: **[F]**
+
+- `legendre(n,x)` (`'unnorm'`) **incluye** `(−1)^m`.
+- `'norm'` se define como `(−1)^m √[(n+½)(n−m)!/(n+m)!] · P_n^m`, y ese
+  `(−1)^m` extra **cancela** el que ya traía `P_n^m`.
+- `scipy.special.sph_harm_y` **sí** la incluye: `Y_1^1(π/2, 0) = −√(3/8π)`. **[M]**
+
+Relación exacta, medida para `n ≤ 3` y todo `m`: **[M]**
+
+```
+Y_nm(Baresch) = (−1)^m · Y_nm(SciPy)         A_nm(Baresch) = (−1)^m · A_nm(SciPy)
+```
+
+| Qué | ¿Detecta la diferencia de fase? |
+|---|---|
+| Campo reconstruido | **No**: el `(−1)^m` entra dos veces. Error 1.6·10⁻¹⁵ con los dos convenios |
+| `F_z` (`force_Z.m`) | **No**: solo acopla el mismo `m` |
+| `F_x` (`force_X.m`) | **Sí, invierte el signo**: acopla `m` con `m ± 1` |
+| `F_y` | No leído; misma estructura esperada |
+
+La relación `Y_{n,−m} = (−1)^m conj(Y_nm)` vale en **los dos** convenios.
+
+**Decisión pendiente del autor**: qué convenio usa `arfield`. Antes de portar
+`force_X`/`force_Y`.
+
+### SciPy ⚠️
+
+`scipy.special.sph_harm` **no existe** desde SciPy 1.17 **[M]** (el entorno del
+autor resolvió 1.18). La vigente es `sph_harm_y(n, m, θ_polar, φ_azimut)`. La
+antigua `sph_harm(m, n, θ, φ)` usaba `θ` para el **azimut**: mismas letras,
+significado cruzado.
+
+### Amplitud de referencia `p₀` ⚠️
+
+En el código, la fuerza en newtons es `Y_p · p₀² · πa² / (2ρc²)`; `force_Z/X/Y`
+devuelven `Y_p` adimensional. **[F]** Qué amplitud es `p₀` depende de cómo se
+normalizaron los `A_nm`:
+
+| generador | `A_nm` normalizados a |
+|---|---|
+| `plane_wave` | amplitud de la onda viajera |
+| receta estacionaria de `incident_fields.m` | amplitud en el vientre (por el `/2`) |
+| `focused_beam` | amplitud en la **superficie**; en el centro de curvatura vale `2kR₀ sin²(α₀/2)` **[M]** |
+
+`force_tweezers.m` divide `P0` por un `gain = 24.3` hardcodeado que no coincide
+con sus propios parámetros (máximo en el plano focal: 248.2 para `m = 0`, 128.8
+para `m = 1`). **[M]** Para DPSM, la referencia natural es de superficie (`v₀`).
+Definición de `p₀` en `arfield`: decisión pendiente del autor.
+
+### Signo de la Ec. 3 de Zhao ⚠️
+
+Contra `force_Z.m` en onda plana viajera: magnitud idéntica a 6 cifras, **signo
+global −1**; el código da el signo físico. **[M]** No citar la Ec. 3 sin este
+aviso.
 
 ---
 

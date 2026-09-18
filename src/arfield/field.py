@@ -58,13 +58,12 @@ def pressure(
 
     Notes
     -----
-    The matrix returned by the assembly is ``16 * M * N`` bytes, but the
-    peak of the call is higher: `influence.compute_green_TS` is also holding
-    the distances and the unit vectors it has no use for. Measured at
-    ``M = 20000`` and ``N = 480``, the peak is 614 MB against a 154 MB
-    result. A volumetric evaluation is where that first becomes the limiting
-    number, and blocking over targets is the answer when it does; it is not
-    needed for a scan line or a plane.
+    The matrix returned by the assembly is ``16 * M * N`` bytes, and the
+    peak of the call is about ``40 * M * N``: `influence.compute_green_TS`
+    holds the ``(M, N, 3)`` difference array while it reduces it to
+    distances (ADR 0013). A volumetric evaluation is where that first
+    becomes the limiting number, and blocking over targets is the answer
+    when it does; it is not needed for a scan line or a plane.
 
     Phase follows the ``exp(-i * omega * t)`` convention, so the phase of
     ``p`` advances by ``kf * R`` with distance from a source. Comparing

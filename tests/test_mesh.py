@@ -94,6 +94,9 @@ def all_shapes():
         "polygon": mesh.polygon(TRIANGLE, 0.05).points,
         "line": mesh.line([0.0, 0.0, 0.0], [0.0, 0.0, 0.1], 0.005),
         "arc": mesh.arc([0.0, 0.0, 0.0], 0.1, 0.0, np.pi, 1e-3),
+        "vogel_circle": mesh.vogel_circle(1.0, 0.1).points,
+        "sphere": mesh.sphere(1.0, 0.2).points,
+        "cap": mesh.sphere(1.0, 0.2, np.pi / 4).points,
     }
 
 
@@ -137,10 +140,13 @@ def test_zero_spacing_raises_on_its_own():
         mesh.line([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 0.0)
 
 
-@pytest.mark.parametrize("stub", [mesh.cylinder, mesh.sphere])
-def test_deferred_surfaces_raise(stub):
+def test_deferred_surfaces_raise():
+    """`cylinder` is still a stub; `sphere` stopped being one and has its
+    own section below."""
     with pytest.raises(NotImplementedError):
-        stub(1.0, 1.0, 1.0)
+        mesh.cylinder(1.0, 1.0, 1.0)
+    with pytest.raises(NotImplementedError):
+        mesh.cone()
 
 
 # --------------------------------------------------------------------------
@@ -523,3 +529,274 @@ def test_mesh_rejects_inconsistent_state():
         mesh.Mesh(points, unit_z, [1.0, 0.0], 1.0, 1.0)
     with pytest.raises(ValueError, match="grid_shape"):
         mesh.Mesh(points, unit_z, unit_x, 1.0, 1.0, (2, 2))
+
+
+# --------------------------------------------------------------------------
+# the Vogel disc
+# --------------------------------------------------------------------------
+
+
+def test_vogel_count_matches_the_hexagonal_cell_area():
+    """Same pitch, same cell area as circle(lattice='hex'), up to rounding.
+
+    That is the comparison the spiral exists for: the retreat ``rs`` and the
+    tangential offset both read ``sqrt(cell_area)``, so two meshes of the
+    same pitch must hand `Source` the same numbers or the comparison is of
+    two different source layers.
+    """
+    radius, pitch = 1.0, 0.05
+    n = mesh.vogel_count(radius, pitch)
+    assert n == round(np.pi * radius**2 / mesh.hex_cell_area(pitch))
+    assert mesh.vogel_cell_area(radius, pitch) == pytest.approx(
+        mesh.hex_cell_area(pitch), rel=1e-2
+    )
+
+
+def test_vogel_count_is_at_least_one_and_refuses_bad_input():
+    assert mesh.vogel_count(1e-6, 1.0) == 1
+    with pytest.raises(ValueError, match="radius"):
+        mesh.vogel_count(0.0, 0.1)
+    with pytest.raises(ValueError, match="pitch"):
+        mesh.vogel_count(1.0, -0.1)
+
+
+def test_vogel_circle_loses_no_area_at_the_outline():
+    """area_ratio is 1 by construction, at every pitch, which is the whole
+    reason the constructor exists next to `circle`."""
+    for pitch in (0.2, 0.07, 0.031):
+        m = mesh.vogel_circle(1.0, pitch)
+        assert m.area_ratio == pytest.approx(1.0, rel=1e-12)
+        assert m.exact_area == pytest.approx(np.pi)
+        assert m.grid_shape is None
+
+
+def test_vogel_nodes_lie_inside_the_disc_and_one_per_annulus():
+    """Node i sits in annulus i: between radius sqrt(i/n) and sqrt((i+1)/n).
+
+    Ordered by increasing radius, one node per equal-area annulus, none on
+    the rim. A node on the rim would have half its territory outside the
+    disc, and the outermost is documented as sitting half a band inside.
+    """
+    radius, pitch = 1.0, 0.05
+    u, v = mesh.vogel_lattice(radius, pitch)
+    n = len(u)
+    r = np.hypot(u, v)
+    index = np.arange(n)
+    assert np.all(r > radius * np.sqrt(index / n))
+    assert np.all(r < radius * np.sqrt((index + 1) / n))
+    assert np.all(np.diff(r) > 0.0)
+    assert r.max() < radius
+
+
+def test_vogel_nodes_do_not_align_into_spokes():
+    """The golden angle: no two of the first thousand nodes share a ray.
+
+    Were the angular step a rational fraction of a turn, angles would
+    repeat and the disc would fill as spokes. Checked on the angle modulo
+    2 pi, sorted: the smallest gap must be well away from zero.
+    """
+    u, v = mesh.vogel_lattice(1.0, 0.03)
+    angle = np.sort(np.mod(np.arctan2(v, u), 2.0 * np.pi))
+    assert np.diff(angle).min() > 1e-4
+
+
+@pytest.mark.parametrize("plane", ["xy", "xz", "yz"])
+def test_vogel_circle_sets_the_frame_of_its_plane(plane):
+    """Same _embed as the lattice shapes, so the same frame and the same
+    normal per plane; the disc lies in the plane it was asked for."""
+    m = mesh.vogel_circle(5e-3, 1e-3, plane=plane)
+    reference = mesh.circle(5e-3, 1e-3, plane=plane)
+    assert m.normal == pytest.approx(reference.normal)
+    assert m.tangent == pytest.approx(reference.tangent)
+    offset = m.points - m.points.mean(axis=0)
+    assert np.abs(offset @ m.normal).max() < 1e-15
+
+
+def test_vogel_circle_center_moves_the_whole_disc():
+    center = np.array([0.3, -0.1, 0.7])
+    m = mesh.vogel_circle(1.0, 0.1, center=center)
+    assert np.linalg.norm(m.points - center, axis=1).max() < 1.0
+    assert np.linalg.norm(m.points - center, axis=1).min() > 0.0
+
+
+def test_vogel_circle_nearest_neighbour_is_below_the_pitch():
+    """About 0.89 of the pitch, as the docstring says: closer than a hex
+    lattice at the same cell area, which is what the tangential offset's
+    smallness argument has to be checked against."""
+    pitch = 0.05
+    m = mesh.vogel_circle(1.0, pitch)
+    ratio = nearest_neighbour_distance(m.points) / pitch
+    assert 0.8 < ratio < 0.95, ratio
+
+
+# --------------------------------------------------------------------------
+# the sphere and the cap
+# --------------------------------------------------------------------------
+
+
+def test_cap_area_closes_to_the_sphere():
+    assert mesh.cap_area(2.0, np.pi) == pytest.approx(4.0 * np.pi * 4.0)
+    assert mesh.cap_area(2.0, np.pi / 2) == pytest.approx(2.0 * np.pi * 4.0)
+    with pytest.raises(ValueError, match="half_angle"):
+        mesh.cap_area(1.0, 0.0)
+    with pytest.raises(ValueError, match="half_angle"):
+        mesh.cap_area(1.0, 4.0)
+
+
+def test_fibonacci_count_matches_the_hexagonal_cell_area():
+    radius, pitch = 1.0, 0.1
+    n = mesh.fibonacci_count(radius, pitch)
+    assert n == round(4.0 * np.pi * radius**2 / mesh.hex_cell_area(pitch))
+    assert mesh.fibonacci_cell_area(radius, pitch) * n == pytest.approx(
+        mesh.cap_area(radius, np.pi)
+    )
+
+
+def test_sphere_points_lie_on_the_sphere_and_normals_point_outward():
+    """|p - center| == radius at every node, and the normal is p / radius.
+
+    The two together are the whole geometry of a pulsating sphere: a node
+    off the sphere radiates from the wrong radius, and a normal that is
+    not radial puts its source somewhere other than behind the surface.
+    """
+    radius = 2.5e-3
+    m = mesh.sphere(radius, 4e-4)
+    r = np.linalg.norm(m.points, axis=1)
+    assert r == pytest.approx(radius, rel=1e-14)
+    assert m.normals == pytest.approx(m.points / radius)
+    assert m.normal.shape == (len(m), 3)
+    assert m.tangent.shape == (len(m), 3)
+
+
+def test_sphere_frame_is_valid_at_every_node():
+    """Unit normal, unit tangent, perpendicular, at every node including
+    the two nearest the poles where a naive tangent would vanish."""
+    m = mesh.sphere(1.0, 0.15)
+    assert np.linalg.norm(m.normals, axis=1) == pytest.approx(1.0)
+    assert np.linalg.norm(m.tangents, axis=1) == pytest.approx(1.0)
+    cosine = np.sum(m.normals * m.tangents, axis=1)
+    assert np.abs(cosine).max() < 1e-12
+
+
+def test_sphere_loses_no_area():
+    for pitch in (0.3, 0.12):
+        m = mesh.sphere(1.0, pitch)
+        assert m.area_ratio == pytest.approx(1.0, rel=1e-12)
+        assert m.exact_area == pytest.approx(4.0 * np.pi)
+        assert m.grid_shape is None
+
+
+def test_sphere_nodes_are_spread_over_both_hemispheres():
+    """One node per equal-z band, from the pole down: the mean z is zero
+    and the extreme nodes sit half a band inside the poles."""
+    m = mesh.sphere(1.0, 0.15)
+    z = m.points[:, 2]
+    n = len(m)
+    assert z.mean() == pytest.approx(0.0, abs=1e-12)
+    assert z.max() == pytest.approx(1.0 - 1.0 / n)
+    assert z.min() == pytest.approx(-1.0 + 1.0 / n)
+
+
+def test_inward_normals_are_the_negated_outward_ones():
+    """`outward=False` is the concave face of a cap, and it is the argument
+    that fails silently downstream; here at least its sign is pinned."""
+    out = mesh.sphere(1.0, 0.2, np.pi / 3)
+    inward = mesh.sphere(1.0, 0.2, np.pi / 3, outward=False)
+    assert np.array_equal(out.points, inward.points)
+    assert np.array_equal(inward.normals, -out.normals)
+    assert np.array_equal(inward.tangents, out.tangents)
+
+
+def test_cap_stays_within_its_half_angle():
+    """Every node inside the cone of half_angle about the axis, none on the
+    rim, and the area is the cap area."""
+    radius, half_angle = 1.0, np.pi / 4
+    m = mesh.sphere(radius, 0.05, half_angle)
+    polar = np.arccos(m.points[:, 2] / radius)
+    assert polar.max() < half_angle
+    assert polar.min() >= 0.0
+    assert m.exact_area == pytest.approx(mesh.cap_area(radius, half_angle))
+    assert m.area_ratio == pytest.approx(1.0, rel=1e-12)
+
+
+def test_southern_cap_is_the_exact_mirror_of_the_northern_one():
+    """axis=(0, 0, -1) goes through a sign flip, not Rodrigues: bit exact."""
+    north = mesh.sphere(1.0, 0.1, np.pi / 4)
+    south = mesh.sphere(1.0, 0.1, np.pi / 4, axis=[0.0, 0.0, -1.0])
+    flip = np.array([1.0, -1.0, -1.0])
+    np.testing.assert_array_equal(south.points, north.points * flip)
+    np.testing.assert_array_equal(south.normals, north.normals * flip)
+    np.testing.assert_array_equal(south.tangents, north.tangents * flip)
+
+
+def test_cap_axis_turns_the_frame_with_the_points():
+    """A tilted cap is the +z cap rotated: normals stay radial and the
+    frame stays orthonormal, which is the check that `sphere` rotated the
+    tangents and not only the points."""
+    axis = np.array([1.0, 2.0, -0.5])
+    m = mesh.sphere(1.0, 0.1, np.pi / 3, axis=axis)
+    assert m.normals == pytest.approx(m.points)
+    cosine = np.sum(m.normals * m.tangents, axis=1)
+    assert np.abs(cosine).max() < 1e-12
+    # Every node inside the cone about the requested axis, none outside it:
+    # the cap points where it was asked to.
+    polar = np.arccos(m.points @ (axis / np.linalg.norm(axis)))
+    assert polar.max() < np.pi / 3
+
+
+def test_sphere_center_is_the_center_of_curvature():
+    center = np.array([0.1, -0.2, 0.3])
+    m = mesh.sphere(0.5, 0.1, center=center)
+    assert np.linalg.norm(m.points - center, axis=1) == pytest.approx(0.5)
+
+
+def test_per_node_frame_survives_rotation_and_translation():
+    """`rotated` on a (K, 3) frame rotates every row; `translated` leaves
+    the frame alone. Same contract as the flat meshes, stated for the
+    first mesh whose frame is a field."""
+    m = mesh.sphere(1.0, 0.2, np.pi / 3)
+    matrix = mesh.rotation([1.0, 1.0, 0.0], 0.8)
+    turned = m.rotated(matrix)
+    assert turned.normals == pytest.approx(m.normals @ matrix.T)
+    assert turned.tangents == pytest.approx(m.tangents @ matrix.T)
+    assert turned.normals == pytest.approx(turned.points)
+    shifted = m.translated([0.1, 0.2, 0.3])
+    assert np.array_equal(shifted.normals, m.normals)
+
+
+def test_per_node_properties_are_read_only_arrays_not_views():
+    """On a curved mesh `normals` is the stored field itself. It must still
+    be read-only, and its shape is (K, 3) exactly as the broadcast view of a
+    flat mesh is, so consumers cannot tell the two apart."""
+    m = mesh.sphere(1.0, 0.2)
+    assert m.normals.shape == m.points.shape
+    assert m.tangents.shape == m.points.shape
+    assert not m.normals.flags.writeable
+    assert not m.tangents.flags.writeable
+
+
+def test_mesh_validates_a_per_node_frame_row_by_row():
+    """A (K, 3) frame is checked at every node, not skipped."""
+    points = np.zeros((4, 3))
+    normals = np.tile([0.0, 0.0, 1.0], (4, 1))
+    tangents = np.tile([1.0, 0.0, 0.0], (4, 1))
+    mesh.Mesh(points, normals, tangents, 1.0, 1.0)
+
+    bad_norm = normals.copy()
+    bad_norm[2] = [0.0, 0.0, 2.0]
+    with pytest.raises(ValueError, match="unit vector"):
+        mesh.Mesh(points, bad_norm, tangents, 1.0, 1.0)
+
+    bad_angle = tangents.copy()
+    bad_angle[3] = [0.0, 0.0, 1.0]
+    with pytest.raises(ValueError, match="perpendicular"):
+        mesh.Mesh(points, normals, bad_angle, 1.0, 1.0)
+
+    with pytest.raises(ValueError, match="shape"):
+        mesh.Mesh(points, normals[:3], tangents, 1.0, 1.0)
+
+
+def test_sphere_repr_does_not_print_the_frame():
+    text = repr(mesh.sphere(1.0, 0.2))
+    assert "frame=per-node" in text
+    assert "normal=[" not in text

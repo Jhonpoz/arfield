@@ -8,6 +8,7 @@ dist/
 .mypy_cache/
 .ipynb_checkpoints/
 playground/
+validation/figures/
 
 # Notas de trabajo locales, no versionadas
 BITACORA.md

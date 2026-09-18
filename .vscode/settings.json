@@ -9,7 +9,8 @@
     "Gorkov",
     "gradn",
     "numpy",
-    "scipy"
+    "scipy",
+    "wavenumber"
   ],
   "cSpell.enabledFileTypes": {
     "yaml": false,
