@@ -38,14 +38,16 @@ Conventions, fixed package-wide and not negotiable per call:
   medium or kept in a module constant: frequency belongs to the experiment,
   not to the fluid or to the method.
 
-What is bound here is what does not oblige a caller to adopt the geometry
-of this package: functions that take arrays of points and scalars, plus
-`Source` as a convenience rather than a required path. The objects that
-describe something concrete are asked for explicitly, since importing them
-is a statement that you want this package's idea of a mesh or a medium::
+What is bound here is the sequence a user script actually writes: describe
+the surface, place the sources, assemble the system, solve, evaluate. The
+kernel is public and documented but is not re-exported: someone with their
+own geometry enters at ``arfield.green_kernel``, ``arfield.pairwise`` or
+``arfield.influence`` and adopts nothing else. Meshes are asked for
+explicitly, since importing them is a statement that you want this
+package's idea of a surface::
 
-    from arfield.mesh import circle
-    from arfield.medium import Medium
+    from arfield import mesh
+    disc = mesh.vogel_circle(radius, pitch)
 
 Scope. One homogeneous, lossless fluid, and surfaces that do not see each
 other: there is no coupled block assembly, no reflector, and no layered or
@@ -59,27 +61,19 @@ Wiley (2007).
 """
 
 from .field import pressure, velocity
-from .green_kernel import gradient_green, green
-from .influence import (
-    compute_euler_gradn_green_TS,
-    compute_grad_green_TSj,
-    compute_green_TS,
-)
-from .pairwise import separation
+from .influence import compute_euler_gradn_green_TS
+from .medium import Medium
+from .particle import Particle
 from .solver import rayleigh_strength, solve_strength
-from .source import Source, tangent_displacement
+from .source import Source
 
 __all__ = [
+    "Medium",
+    "Particle",
     "Source",
     "compute_euler_gradn_green_TS",
-    "compute_grad_green_TSj",
-    "compute_green_TS",
-    "gradient_green",
-    "green",
     "pressure",
     "rayleigh_strength",
-    "separation",
     "solve_strength",
-    "tangent_displacement",
     "velocity",
 ]
