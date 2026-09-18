@@ -22,7 +22,7 @@ jobs:
         run: pip install -e .
 
       - name: Run benchmarks
-        run: pytest validation/ -m slow
+        run: pytest validation/ -m slow -s -rA
 
       - name: Upload figures
         if: always()

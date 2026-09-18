@@ -11,10 +11,21 @@ requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Jhon F. Pazos Ospina" }]
 keywords = ["DPSM", "acoustic levitation", "acoustic radiation force", "ultrasonics"]
+# SciPy is not imported under src/ yet. It stays a dependency because the
+# GLMT milestone needs scipy.special (spherical Bessel and Hankel functions,
+# spherical harmonics), and the validation benchmarks already use it.
 dependencies = ["numpy>=2.0", "scipy>=1.14"]
+
+[project.optional-dependencies]
+# Benchmarks under validation/ only. Not needed to import or use the package:
+# matplotlib writes the figures the validation workflow uploads as artifacts.
+validation = ["matplotlib>=3.9"]
 
 [tool.ruff]
 line-length = 88
+# Exploratory notebooks are not held to the package's lint rules.
+# playground/ is git-ignored, so it never reaches the linter and needs no entry.
+extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "NPY", "UP"]
@@ -24,6 +35,8 @@ python_version = "3.12"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
+# Bare `pytest` collects unit tests only. The benchmarks under validation/
+# are reached by naming the directory: `pytest validation/ -m slow`.
 testpaths = ["tests"]
 markers = [
     "slow: heavy benchmarks, excluded from CI",
