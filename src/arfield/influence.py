@@ -3,7 +3,7 @@
 import numpy as np
 
 from .green_kernel import gradient_green, green
-from .pairwise import separation
+from .pairwise import separation, separation_distance
 
 __all__ = ["compute_euler_gradn_green_TS", "compute_grad_green_TSj", "compute_green_TS"]
 
@@ -43,24 +43,14 @@ def compute_green_TS(targets: np.ndarray, sources: np.ndarray, kf: float) -> np.
     instead, so strengths computed here are not numerically comparable with
     the book's, although every field derived from them is.
 
-    Separation returns unit vectors alongside the distances, and only the
-    distances are used here. That unused ``(M, N, 3)`` float64 array costs
-    ``24 * M * N`` bytes, half again the size of the complex matrix being
-    returned, and it is the largest single allocation this call makes:
-    measured at ``M = 20000`` and ``N = 480``, the peak is 614 MB, of which
-    the unused array is 230 and the returned matrix 154. Quoted as a ratio
-    the figure moves with whatever else the kernel is holding at the time;
-    the bytes do not.
-
-    Binding it to ``_`` does not free it. The name is an ordinary local and
-    the array stays alive until this function returns. Python has no
-    equivalent of MATLAB's ``nargout``, so a callee cannot learn that one of
-    its outputs will be discarded and skip building it.
-
-    It is left this way on purpose: one separation routine shared by the
-    whole module is worth more than the allocation at the sizes this package
-    targets. The fix, on the day a machine runs out of room, is a
-    distances-only path in ``pairwise``, not a change here.
+    Distances only. `pairwise.separation_distance` builds the ``(M, N, 3)``
+    difference array, reduces it to distances and drops it on return, so
+    the peak of this call is that array plus the returned matrix: about
+    ``40 * M * N`` bytes, against ``16 * M * N`` returned. Before ADR 0013
+    the unit vectors were built, normalised and discarded as well, which
+    put the peak at 614 MB for a 154 MB result at ``M = 20000``,
+    ``N = 480``; the distances-only path is the fix that docstring
+    promised.
 
     Zero distance is not handled. Sources sit a distance ``rs`` behind the
     surface and collocation points are offset tangentially, so a target
@@ -72,7 +62,7 @@ def compute_green_TS(targets: np.ndarray, sources: np.ndarray, kf: float) -> np.
     Placko, D. and Kundu, T., *DPSM for Modeling Engineering Problems*,
     Wiley (2007), chapter 1.
     """
-    r_TS, _ = separation(targets, sources)
+    r_TS = separation_distance(targets, sources)
     return green(r_TS, kf)
 
 
