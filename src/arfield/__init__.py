@@ -60,7 +60,7 @@ Placko, D. and Kundu, T., *DPSM for Modeling Engineering Problems*,
 Wiley (2007).
 """
 
-from .field import pressure, velocity
+from .field import Field, pressure, velocity, velocity_gradient
 from .influence import compute_euler_gradn_green_TS
 from .medium import Medium
 from .particle import Particle
@@ -68,6 +68,7 @@ from .solver import rayleigh_strength, solve_strength
 from .source import Source
 
 __all__ = [
+    "Field",
     "Medium",
     "Particle",
     "Source",
@@ -76,4 +77,5 @@ __all__ = [
     "rayleigh_strength",
     "solve_strength",
     "velocity",
+    "velocity_gradient",
 ]
