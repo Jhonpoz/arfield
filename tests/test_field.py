@@ -1,21 +1,32 @@
 """Unit tests for arfield.field.
 
-Step five of the method: strengths in, field out. The two functions are
-short, so what is worth testing is not their arithmetic but the three
-things that can go wrong in them without raising -- a strength paired with
-the wrong source, an axis picked up in the wrong order, and the Euler
-factor applied to the wrong side of the contraction.
+Step five of the method: strengths in, field out. The calculations are
+short, so what is worth testing is not their arithmetic but the things that
+can go wrong in them without raising -- a strength paired with the wrong
+source, an axis picked up in the wrong order, and the Euler factor applied
+to the wrong side of a contraction.
 
-`velocity` is checked against `pressure` by finite differences rather than
-against the influence module, so a shared misreading of the kernel cannot
-satisfy both.
+Each quantity is checked against the one below it by finite differences
+rather than against the influence module: `velocity` against `pressure`,
+`velocity_gradient` against `velocity`. A shared misreading of the kernel
+cannot satisfy both ends of a difference.
+
+The three functions go through `Field`, so the physics tests exercise the
+class as well. What the class adds on its own is caching, and that is
+tested separately, by looking at ``__dict__``: a table that is built when
+it should not be, or rebuilt when it is already there, changes no number
+and is invisible to every assertion above.
 """
 
 import numpy as np
 import pytest
 
 from arfield import mesh
-from arfield.field import pressure, velocity
+from arfield.field import Field, pressure, velocity, velocity_gradient
+from arfield.green_kernel import hessian_green
+from arfield.influence import compute_green_TS
+from arfield.medium import Medium
+from arfield.pairwise import separation
 
 # Air at 40 kHz, the working point of every milestone in this project.
 C = 343.0
@@ -327,3 +338,300 @@ def test_the_inputs_come_back_unchanged():
         (targets, source_strengths, sources), before, strict=True
     ):
         assert np.array_equal(after, original)
+
+
+# --------------------------------------------------------------------------
+# the class, as a cache: nothing here checks a physical value
+# --------------------------------------------------------------------------
+
+
+def field_for(seed=20):
+    """A `Field` and the strengths to spend on it."""
+    targets, source_strengths, sources = scene(seed=seed)
+    return Field(targets, sources, KF, Medium(C, RHO)), source_strengths
+
+
+TABLES = ("_separation", "_green_TS", "_d_green_dr_TS", "_aux_h", "_aux_s")
+
+
+def cached(field):
+    """The tables built so far, read off the instance dictionary."""
+    return {name for name in TABLES if name in field.__dict__}
+
+
+def test_construction_computes_nothing():
+    """The object is cheap to make; the tables cost M * N each.
+
+    A constructor that eagerly filled them would make blocking over targets
+    pointless, since the peak would be paid before the first method call.
+    """
+    field, _ = field_for()
+    assert cached(field) == set()
+
+
+def test_the_first_table_matches_the_influence_module():
+    """The chain must not have changed the numbers Milestone 1 validated.
+
+    `compute_green_TS` reaches the same kernel by its own route. Both go
+    through the same difference and distance, so the agreement is exact,
+    and anything less than exact is a change of arithmetic worth seeing.
+    """
+    field, _ = field_for()
+    reference = compute_green_TS(field.targets, field.sources, KF)
+    assert np.array_equal(field._green_TS, reference)
+
+
+def test_a_table_is_computed_once():
+    """Identity, not equality: two equal arrays would pass a value check."""
+    field, _ = field_for()
+    assert field._green_TS is field._green_TS
+    assert field._separation is field._separation
+
+
+def test_pressure_does_not_build_the_tables_it_does_not_need():
+    """Pressure needs the distances and the kernel, and nothing else.
+
+    Building the derivative tables here would cost 32 bytes per pair for an
+    answer that never looks at them.
+    """
+    field, source_strengths = field_for()
+    field.pressure(source_strengths)
+    assert cached(field) == {"_separation", "_green_TS"}
+
+
+def test_velocity_does_not_build_the_gradient_tables():
+    """`h` and `s` belong to `velocity_gradient` alone."""
+    field, source_strengths = field_for()
+    field.velocity(source_strengths)
+    assert cached(field) == {"_separation", "_green_TS", "_d_green_dr_TS"}
+
+
+def test_a_second_quantity_reuses_the_tables_of_the_first():
+    """The whole point of the class: one separation, one exponential.
+
+    Asking for the velocity after the pressure must not rebuild what the
+    pressure already paid for.
+    """
+    field, source_strengths = field_for()
+    field.pressure(source_strengths)
+    first = field._green_TS
+
+    field.velocity(source_strengths)
+    assert field._green_TS is first
+
+
+def test_deleting_a_table_recomputes_it():
+    """The escape valve for memory: drop a table, get it back on demand."""
+    field, _ = field_for()
+    original = field._green_TS
+
+    del field._green_TS
+    assert "_green_TS" not in field.__dict__
+
+    rebuilt = field._green_TS
+    assert rebuilt is not original
+    assert np.array_equal(rebuilt, original)
+
+
+def test_the_inputs_are_read_once_and_then_the_geometry_is_fixed():
+    """The arrays are stored, not copied, and one chain hangs off them.
+
+    Mutating before the first table takes effect; mutating after it does
+    not, and cannot leave a mixed state, because every table descends from
+    the single cached separation. That is the property worth pinning: a
+    split chain would let one table describe the old geometry and the next
+    the new, with nothing to signal it.
+    """
+    field, source_strengths = field_for()
+    field.pressure(source_strengths)
+    frozen = field.targets.copy()
+
+    field.targets[0] += 0.01
+
+    assert field.pressure(source_strengths) == pytest.approx(
+        pressure(frozen, source_strengths, field.sources, KF)
+    )
+    assert field.velocity(source_strengths) == pytest.approx(
+        velocity(frozen, source_strengths, field.sources, KF, C, RHO)
+    )
+
+
+def test_the_tables_have_the_shapes_and_dtypes_of_their_definitions():
+    """A real table and a complex one, and the pair axis before the source."""
+    field, _ = field_for()
+    shape = (len(field.targets), len(field.sources))
+
+    assert field._r_TS.shape == shape
+    assert field._r_TS.dtype == np.float64
+    assert field._e_TSj.shape == (*shape, 3)
+    assert field._e_TSj.dtype == np.float64
+    for table in (field._green_TS, field._d_green_dr_TS, field._aux_h, field._aux_s):
+        assert table.shape == shape
+        assert table.dtype == np.complex128
+
+
+def test_a_field_without_a_medium_gives_pressure_and_refuses_the_rest():
+    """There is no default fluid, and pressure does not need one.
+
+    A `Field` that silently assumed air would return plausible numbers for a
+    medium nobody chose.
+    """
+    targets, source_strengths, sources = scene(seed=21)
+    field = Field(targets, sources, KF)
+
+    field.pressure(source_strengths)
+    with pytest.raises(AttributeError):
+        field.velocity(source_strengths)
+    with pytest.raises(AttributeError):
+        field.velocity_gradient(source_strengths)
+
+
+def test_the_functions_agree_with_the_class():
+    """The wrappers must be wrappers, not a second implementation."""
+    targets, source_strengths, sources = scene(seed=22)
+    field = Field(targets, sources, KF, Medium(C, RHO))
+
+    assert np.array_equal(
+        pressure(targets, source_strengths, sources, KF),
+        field.pressure(source_strengths),
+    )
+    assert np.array_equal(
+        velocity(targets, source_strengths, sources, KF, C, RHO),
+        field.velocity(source_strengths),
+    )
+    assert np.array_equal(
+        velocity_gradient(targets, source_strengths, sources, KF, C, RHO),
+        field.velocity_gradient(source_strengths),
+    )
+
+
+# --------------------------------------------------------------------------
+# velocity_gradient, against velocity
+# --------------------------------------------------------------------------
+
+
+def test_velocity_gradient_matches_finite_differences_of_velocity():
+    """Entry [m, i, j] is d v_j / d x_i, differenced along each axis.
+
+    The independent check of the whole contraction: an index order swapped
+    between the two unit vectors, or `s` used where `h` belongs, disagrees
+    with the velocity it is supposed to be the gradient of.
+    """
+    targets, source_strengths, sources = scene(n_targets=6, seed=23)
+    step = 1e-7
+
+    expected = np.empty((len(targets), 3, 3), dtype=np.complex128)
+    for axis in range(3):
+        offset = np.zeros(3)
+        offset[axis] = step
+        ahead = velocity(targets + offset, source_strengths, sources, KF, C, RHO)
+        behind = velocity(targets - offset, source_strengths, sources, KF, C, RHO)
+        expected[:, axis, :] = (ahead - behind) / (2.0 * step)
+
+    gradient = velocity_gradient(targets, source_strengths, sources, KF, C, RHO)
+    assert gradient == pytest.approx(expected, rel=1e-6)
+
+
+def test_velocity_gradient_matches_the_tabulated_hessian():
+    """The same sum with the (M, N, 3, 3) array built, which it never is.
+
+    `hessian_green` has no other caller now, and this is why it stays: it is
+    the reference the contracted route is checked against. Agreement is to
+    rounding, not exact, because the factors are multiplied in a different
+    order and floating-point addition is not associative.
+    """
+    targets, source_strengths, sources = scene(seed=24)
+    r_TS, e_TSj = separation(targets, sources)
+
+    expected = np.einsum(
+        "mnij,n->mij", hessian_green(r_TS, e_TSj, KF), source_strengths
+    ) / (1j * OMEGA * RHO)
+
+    gradient = velocity_gradient(targets, source_strengths, sources, KF, C, RHO)
+    assert gradient == pytest.approx(expected, rel=1e-12)
+
+
+def test_the_velocity_gradient_is_symmetric():
+    """It is the Hessian of a scalar, so d_i v_j = d_j v_i.
+
+    Free, and it catches an asymmetric contraction: writing the two unit
+    vector axes from the same operand twice by mistake would still produce a
+    (M, 3, 3) that passes every shape check.
+    """
+    targets, source_strengths, sources = scene(seed=25)
+    gradient = velocity_gradient(targets, source_strengths, sources, KF, C, RHO)
+    assert gradient == pytest.approx(gradient.transpose(0, 2, 1))
+
+
+def test_the_trace_of_the_velocity_gradient_is_helmholtz():
+    """sum_i d_i v_i = -kf**2 p / (i omega rho), away from the sources.
+
+    The diagonal of ``delta_ij h - e_i e_j s`` sums to ``3h - s``, which is
+    ``-kf**2 G`` by the definition of `s`. That subtraction is badly
+    conditioned when ``3h`` dwarfs ``kf**2 G``, so the identity is asserted
+    where the package evaluates: the scene is checked to sit at kf * r of
+    order one or more, and the tolerance would have to be loosened for a
+    target pressed against a source.
+    """
+    targets, source_strengths, sources = scene(seed=26)
+    r_TS, _ = separation(targets, sources)
+    assert (KF * r_TS).min() > 1.0
+
+    gradient = velocity_gradient(targets, source_strengths, sources, KF, C, RHO)
+    field = pressure(targets, source_strengths, sources, KF)
+
+    trace = np.trace(gradient, axis1=1, axis2=2)
+    assert trace == pytest.approx(-(KF**2) * field / (1j * OMEGA * RHO))
+
+
+def test_the_velocity_gradient_rotates_with_the_geometry():
+    """A rank-two tensor: turning the scene gives Q G Q^T, not G.
+
+    The assertion that holds for the pressure and the one that holds for the
+    velocity would both pass on a wrongly transposed answer; this one does
+    not.
+    """
+    targets, source_strengths, sources = scene(seed=27)
+    matrix = mesh.rotation([0.3, -0.7, 0.2], 0.9)
+
+    turned = velocity_gradient(
+        targets @ matrix.T, source_strengths, sources @ matrix.T, KF, C, RHO
+    )
+    straight = velocity_gradient(targets, source_strengths, sources, KF, C, RHO)
+    assert turned == pytest.approx(matrix @ straight @ matrix.T)
+
+
+def test_the_velocity_gradient_is_linear_in_the_strengths():
+    """Both terms contract A once, so superposition has to survive both."""
+    targets, first, sources = scene(seed=28)
+    second = strengths(len(sources), seed=44)
+
+    combined = velocity_gradient(targets, first + second, sources, KF, C, RHO)
+    one = velocity_gradient(targets, first, sources, KF, C, RHO)
+    other = velocity_gradient(targets, second, sources, KF, C, RHO)
+    assert combined == pytest.approx(one + other)
+
+
+def test_the_velocity_gradient_scales_inversely_with_c_and_rho():
+    """Same Euler factor as `velocity`, applied to the (M, 3, 3) result.
+
+    A factor folded into `h` or `s` instead would scale the diagonal and the
+    outer product differently and break this only in one of the two terms.
+    """
+    targets, source_strengths, sources = scene(seed=29)
+
+    base = velocity_gradient(targets, source_strengths, sources, KF, C, RHO)
+    denser = velocity_gradient(targets, source_strengths, sources, KF, C, 2 * RHO)
+    faster = velocity_gradient(targets, source_strengths, sources, KF, 2 * C, RHO)
+
+    assert denser == pytest.approx(0.5 * base)
+    assert faster == pytest.approx(0.5 * base)
+
+
+def test_the_velocity_gradient_has_a_matrix_per_target_and_is_complex():
+    """One 3 by 3 per target, in target order, and never real."""
+    targets, source_strengths, sources = scene(n_targets=9, seed=30)
+    gradient = velocity_gradient(targets, source_strengths, sources, KF, C, RHO)
+
+    assert gradient.shape == (9, 3, 3)
+    assert gradient.dtype == np.complex128
